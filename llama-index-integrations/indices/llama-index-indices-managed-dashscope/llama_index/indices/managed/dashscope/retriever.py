@@ -81,7 +81,8 @@ class DashScopeCloudRetriever(BaseRetriever):
     def retrieve(
         self, str_or_query_bundle: QueryType, query_history: List[Dict] = None
     ) -> List[NodeWithScore]:
-        """Retrieve nodes given query.
+        """
+        Retrieve nodes given query.
 
         Args:
             str_or_query_bundle (QueryType): Either a query string or
@@ -185,7 +186,7 @@ class DashScopeCloudRetriever(BaseRetriever):
         }
         # extract query_history for multi-turn query rewrite
         if "query_history" in kwargs:
-            params["query_hisory"] = kwargs.get("query_history")
+            params["query_history"] = kwargs.get("query_history")
 
         response_data = utils.post(self.base_url, headers=self.headers, params=params)
         nodes = []

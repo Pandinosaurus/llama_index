@@ -1,18 +1,16 @@
 import os
-import urllib.parse
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, List, Any
+from ibm_watsonx_ai import APIClient
 
 
 from llama_index.core.base.llms.generic_utils import (
     get_from_param_or_env,
 )
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
 
 # Import SecretStr directly from pydantic
 # since there is not one in llama_index.core.bridge.pydantic
-try:
-    from pydantic.v1 import SecretStr
-except ImportError:
-    from pydantic import SecretStr
+from pydantic import SecretStr
 
 
 def resolve_watsonx_credentials(
@@ -22,7 +20,6 @@ def resolve_watsonx_credentials(
     token: Optional[str] = None,
     username: Optional[str] = None,
     password: Optional[str] = None,
-    instance_id: Optional[str] = None
 ) -> Dict[str, SecretStr]:
     """
     Resolve watsonx.ai credentials. If the value of given param is None
@@ -33,13 +30,11 @@ def resolve_watsonx_credentials(
     :return: Dictionary with resolved credentials items
     :rtype: Dict[str, SecretStr]
     """
-    creds = {}
-    creds["url"] = convert_to_secret_str(
-        get_from_param_or_env("url", url, "WATSONX_URL")
-    )
+    creds = {
+        "url": convert_to_secret_str(get_from_param_or_env("url", url, "WATSONX_URL"))
+    }
 
-    parsed_url = urllib.parse.urlparse(creds["url"].get_secret_value())
-    if parsed_url.netloc.endswith("cloud.ibm.com"):
+    if creds["url"].get_secret_value() in APIClient.PLATFORM_URLS_MAP:
         if not (apikey or "WATSONX_APIKEY" in os.environ) and not (
             token or "WATSONX_TOKEN" in os.environ
         ):
@@ -99,11 +94,6 @@ def resolve_watsonx_credentials(
                 get_from_param_or_env("username", username, "WATSONX_USERNAME")
             )
 
-        if not instance_id or "WATSONX_INSTANCE_ID" not in os.environ:
-            creds["instance_id"] = convert_to_secret_str(
-                get_from_param_or_env("instance_id", instance_id, "WATSONX_INSTANCE_ID")
-            )
-
     return creds
 
 
@@ -112,3 +102,51 @@ def convert_to_secret_str(value: Union[SecretStr, str]) -> SecretStr:
     if isinstance(value, SecretStr):
         return value
     return SecretStr(value)
+
+
+def to_watsonx_message_dict(message: ChatMessage) -> dict:
+    """Convert generic message to message dict."""
+    message_dict = {
+        "role": message.role.value,
+        "content": message.content,
+    }
+
+    message_dict.update(message.additional_kwargs)
+
+    return message_dict
+
+
+def from_watsonx_message(message: dict) -> ChatMessage:
+    """Convert Watsonx message dict to generic message."""
+    role = message.get("role", MessageRole.ASSISTANT)
+    content = message.get("content")
+
+    additional_kwargs: Dict[str, Any] = {}
+    if message.get("tool_calls") is not None:
+        tool_calls: List[dict] = message.get("tool_calls")
+        additional_kwargs.update(tool_calls=tool_calls)
+
+    return ChatMessage(role=role, content=content, additional_kwargs=additional_kwargs)
+
+
+def update_tool_calls(tool_calls: list, tool_calls_update: list):
+    """
+    Use the tool_calls_update objects received from stream chunks
+    to update the running tool_calls object.
+    """
+    if tool_calls_update is None:
+        return tool_calls
+
+    tc_delta = tool_calls_update[0]
+
+    if len(tool_calls) == 0:
+        tool_calls.append(tc_delta)
+    else:
+        t = tool_calls[-1]
+        if t["index"] != tc_delta["index"]:
+            tool_calls.append(tc_delta)
+        else:
+            t["function"]["arguments"] += tc_delta["function"]["arguments"] or ""
+            t["function"]["name"] += tc_delta["function"]["name"] or ""
+
+    return tool_calls

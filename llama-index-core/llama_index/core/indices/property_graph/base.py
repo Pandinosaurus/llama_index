@@ -1,9 +1,9 @@
 import asyncio
-from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Sequence, Type, TYPE_CHECKING
 
 from llama_index.core.data_structs import IndexLPG
 from llama_index.core.base.base_retriever import BaseRetriever
-from llama_index.core.base.llms.base import BaseLLM
+from llama_index.core.llms import LLM
 from llama_index.core.embeddings.utils import EmbedType, resolve_embed_model
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.graph_stores.simple_labelled import SimplePropertyGraphStore
@@ -41,12 +41,13 @@ if TYPE_CHECKING:
 
 
 class PropertyGraphIndex(BaseIndex[IndexLPG]):
-    """An index for a property graph.
+    """
+    An index for a property graph.
 
     Args:
         nodes (Optional[Sequence[BaseNode]]):
             A list of nodes to insert into the index.
-        llm (Optional[BaseLLM]):
+        llm (Optional[LLM]):
             The language model to use for extracting triplets. Defaults to `Settings.llm`.
         kg_extractors (Optional[List[TransformComponent]]):
             A list of transformations to apply to the nodes to extract triplets.
@@ -71,6 +72,7 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
             The storage context to use.
         show_progress (bool):
             Whether to show progress bars for transformations. Defaults to `False`.
+
     """
 
     index_struct_cls = IndexLPG
@@ -78,7 +80,7 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
     def __init__(
         self,
         nodes: Optional[Sequence[BaseNode]] = None,
-        llm: Optional[BaseLLM] = None,
+        llm: Optional[LLM] = None,
         kg_extractors: Optional[List[TransformComponent]] = None,
         property_graph_store: Optional[PropertyGraphStore] = None,
         # vector related params
@@ -117,7 +119,7 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
                 else Settings.embed_model
             )
         else:
-            self._embed_model = None
+            self._embed_model = None  # type: ignore
 
         self._kg_extractors = kg_extractors or [
             SimpleLLMPathExtractor(llm=llm or Settings.llm),
@@ -142,11 +144,11 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
 
     @classmethod
     def from_existing(
-        cls: "PropertyGraphIndex",
+        cls: Type["PropertyGraphIndex"],
         property_graph_store: PropertyGraphStore,
         vector_store: Optional[BasePydanticVectorStore] = None,
         # general params
-        llm: Optional[BaseLLM] = None,
+        llm: Optional[LLM] = None,
         kg_extractors: Optional[List[TransformComponent]] = None,
         # vector related params
         use_async: bool = True,
@@ -179,6 +181,8 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
     @property
     def property_graph_store(self) -> PropertyGraphStore:
         """Get the labelled property graph store."""
+        assert self.storage_context.property_graph_store is not None
+
         return self.storage_context.property_graph_store
 
     @property
@@ -305,6 +309,8 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
 
     def _insert_nodes_to_vector_index(self, nodes: List[LabelledNode]) -> None:
         """Insert vector nodes."""
+        assert self.vector_store is not None
+
         llama_nodes: List[TextNode] = []
         for node in nodes:
             if node.embedding is not None:
@@ -323,7 +329,9 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
 
         self.vector_store.add(llama_nodes)
 
-    def _build_index_from_nodes(self, nodes: Optional[Sequence[BaseNode]]) -> IndexLPG:
+    def _build_index_from_nodes(
+        self, nodes: Optional[Sequence[BaseNode]], **build_kwargs: Any
+    ) -> IndexLPG:
         """Build index from nodes."""
         nodes = self._insert_nodes(nodes or [])
 
@@ -336,7 +344,8 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
         include_text: bool = True,
         **kwargs: Any,
     ) -> BaseRetriever:
-        """Return a retriever for the index.
+        """
+        Return a retriever for the index.
 
         Args:
             sub_retrievers (Optional[List[BasePGRetriever]]):
@@ -346,6 +355,7 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
                 Whether to include source-text in the retriever results.
             **kwargs:
                 Additional kwargs to pass to the retriever.
+
         """
         from llama_index.core.indices.property_graph.retriever import (
             PGRetriever,
@@ -380,7 +390,8 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
                     )
                 )
 
-        return PGRetriever(sub_retrievers, use_async=self._use_async, **kwargs)
+        use_async_val = kwargs.pop("use_async", self._use_async)
+        return PGRetriever(sub_retrievers, use_async=use_async_val, **kwargs)
 
     def _delete_node(self, node_id: str, **delete_kwargs: Any) -> None:
         """Delete a node."""
@@ -390,6 +401,7 @@ class PropertyGraphIndex(BaseIndex[IndexLPG]):
         """Index-specific logic for inserting nodes to the index struct."""
         self._insert_nodes(nodes)
 
+    @property
     def ref_doc_info(self) -> Dict[str, RefDocInfo]:
         """Retrieve a dict mapping of ingested documents and their nodes+metadata."""
         raise NotImplementedError(

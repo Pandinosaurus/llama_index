@@ -13,7 +13,8 @@ def _remove_space(x):
 
 
 class StreamingDetokenizer:
-    """The streaming detokenizer interface so that we can detokenize one token at a time.
+    """
+    The streaming detokenizer interface so that we can detokenize one token at a time.
 
     Example usage is as follows:
 
@@ -65,7 +66,8 @@ class StreamingDetokenizer:
 
 
 class NaiveStreamingDetokenizer(StreamingDetokenizer):
-    """NaiveStreamingDetokenizer relies on the underlying tokenizer
+    """
+    NaiveStreamingDetokenizer relies on the underlying tokenizer
     implementation and should work with every tokenizer.
 
     Its complexity is O(T^2) where T is the longest line since it will
@@ -110,7 +112,8 @@ class NaiveStreamingDetokenizer(StreamingDetokenizer):
 
 
 class SPMStreamingDetokenizer(StreamingDetokenizer):
-    """A streaming detokenizer for SPM models.
+    """
+    A streaming detokenizer for SPM models.
 
     It adds tokens to the text if the next token starts with the special SPM
     underscore which results in linear complexity.
@@ -157,7 +160,8 @@ class SPMStreamingDetokenizer(StreamingDetokenizer):
 
 
 class BPEStreamingDetokenizer(StreamingDetokenizer):
-    """A streaming detokenizer for OpenAI style BPE models.
+    """
+    A streaming detokenizer for OpenAI style BPE models.
 
     It adds tokens to the text if the next token starts with a space similar to
     the SPM detokenizer.
@@ -239,7 +243,8 @@ class BPEStreamingDetokenizer(StreamingDetokenizer):
 
 
 class TokenizerWrapper:
-    """A wrapper that combines an HF tokenizer and a detokenizer.
+    """
+    A wrapper that combines an HF tokenizer and a detokenizer.
 
     Accessing any attribute other than the ``detokenizer`` is forwarded to the
     huggingface tokenizer.
@@ -257,7 +262,7 @@ class TokenizerWrapper:
 
 
 def _match(a, b):
-    if type(a) != type(b):
+    if type(a) is not type(b):
         return False
     if isinstance(a, dict):
         return len(a) == len(b) and all(k in b and _match(a[k], b[k]) for k in a)
@@ -303,13 +308,16 @@ def _is_bpe_decoder(decoder):
     return _match(_target_description, decoder)
 
 
-def load_tokenizer(model_path, tokenizer_config_extra={}):
-    """Load a huggingface tokenizer and try to infer the type of streaming
+def load_tokenizer(model_path, tokenizer_config_extra=None):
+    """
+    Load a huggingface tokenizer and try to infer the type of streaming
     detokenizer to use.
 
     Note, to use a fast streaming tokenizer, pass a local file path rather than
     a Hugging Face repo ID.
     """
+    if tokenizer_config_extra is None:
+        tokenizer_config_extra = {}
     detokenizer_class = NaiveStreamingDetokenizer
 
     tokenizer_file = model_path / "tokenizer.json"

@@ -1,26 +1,46 @@
+import json
 import logging
-from typing import Any, Callable, List, Optional, cast
+import os
+
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.constants import DEFAULT_SIMILARITY_TOP_K
 from llama_index.core.indices.vector_store.base import VectorStoreIndex
-from llama_index.core.schema import BaseNode, IndexNode, NodeWithScore, QueryBundle
+from llama_index.core.schema import (
+    BaseNode,
+    IndexNode,
+    NodeWithScore,
+    QueryBundle,
+    MetadataMode,
+)
 from llama_index.core.storage.docstore.types import BaseDocumentStore
+from llama_index.core.vector_stores.types import MetadataFilters
 from llama_index.core.vector_stores.utils import (
     node_to_metadata_dict,
     metadata_dict_to_node,
+    build_metadata_filter_fn,
 )
 
 import bm25s
 import Stemmer
-
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PERSIST_ARGS = {
+    "similarity_top_k": "similarity_top_k",
+    "_verbose": "verbose",
+    "corpus_weight_mask": "corpus_weight_mask",
+}
+
+DEFAULT_PERSIST_FILENAME = "retriever.json"
+
 
 class BM25Retriever(BaseRetriever):
-    """A BM25 retriever that uses the BM25 algorithm to retrieve nodes.
+    r"""
+    A BM25 retriever that uses the BM25 algorithm to retrieve nodes.
 
     Args:
         nodes (List[BaseNode], optional):
@@ -39,8 +59,13 @@ class BM25Retriever(BaseRetriever):
             The objects to retrieve. Defaults to None.
         object_map (dict, optional):
             A map of object IDs to nodes. Defaults to None.
+        token_pattern (str, optional):
+            The token pattern to use. Defaults to (?u)\\b\\w\\w+\\b.
+        skip_stemming (bool, optional):
+            Whether to skip stemming. Defaults to False.
         verbose (bool, optional):
             Whether to show progress. Defaults to False.
+
     """
 
     def __init__(
@@ -54,9 +79,15 @@ class BM25Retriever(BaseRetriever):
         objects: Optional[List[IndexNode]] = None,
         object_map: Optional[dict] = None,
         verbose: bool = False,
+        skip_stemming: bool = False,
+        token_pattern: str = r"(?u)\b\w\w+\b",
+        filters: Optional[MetadataFilters] = None,
+        corpus_weight_mask: Optional[List[int]] = None,
     ) -> None:
         self.stemmer = stemmer or Stemmer.Stemmer("english")
         self.similarity_top_k = similarity_top_k
+        self.token_pattern = token_pattern
+        self.skip_stemming = skip_stemming
 
         if existing_bm25 is not None:
             self.bm25 = existing_bm25
@@ -65,16 +96,56 @@ class BM25Retriever(BaseRetriever):
             if nodes is None:
                 raise ValueError("Please pass nodes or an existing BM25 object.")
 
-            self.corpus = [node_to_metadata_dict(node) for node in nodes]
+            self.corpus = [
+                node_to_metadata_dict(node) | {"node_id": node.node_id}
+                for node in nodes
+            ]
 
             corpus_tokens = bm25s.tokenize(
-                [node.get_content() for node in nodes],
+                [node.get_content(metadata_mode=MetadataMode.EMBED) for node in nodes],
                 stopwords=language,
-                stemmer=stemmer,
+                stemmer=self.stemmer if not skip_stemming else None,
+                token_pattern=self.token_pattern,
                 show_progress=verbose,
             )
             self.bm25 = bm25s.BM25()
             self.bm25.index(corpus_tokens, show_progress=verbose)
+
+        if (
+            self.bm25.scores.get("num_docs")
+            and int(self.bm25.scores["num_docs"]) < self.similarity_top_k
+        ):
+            if int(self.bm25.scores["num_docs"]) == 0:
+                raise ValueError(
+                    "No nodes added to the retriever kindly add more data."
+                )
+
+            logger.warning(
+                "As bm25s.BM25 requires k less than or equal to number of nodes added. Overriding the value of similarity_top_k to number of nodes added."
+            )
+            self.similarity_top_k = int(self.bm25.scores["num_docs"])
+
+        self.corpus_weight_mask = corpus_weight_mask or None
+        if filters and self.corpus:
+            # Build a weight mask for each corpus to filter out only relevant nodes
+            _corpus_dict = {
+                corpus_token["node_id"]: corpus_token for corpus_token in self.corpus
+            }
+            _query_filter_fn = build_metadata_filter_fn(
+                lambda node_id: _corpus_dict[node_id], filters
+            )
+            self.corpus_weight_mask = [
+                int(_query_filter_fn(corpus_token["node_id"]))
+                for corpus_token in self.corpus
+            ]
+
+            # Check if all nodes were filtered out
+            if not any(self.corpus_weight_mask):
+                raise ValueError(
+                    "All nodes were filtered out by the metadata filters. "
+                    "Please adjust your filters or add more data."
+                )
+
         super().__init__(
             callback_manager=callback_manager,
             object_map=object_map,
@@ -92,6 +163,9 @@ class BM25Retriever(BaseRetriever):
         language: str = "en",
         similarity_top_k: int = DEFAULT_SIMILARITY_TOP_K,
         verbose: bool = False,
+        skip_stemming: bool = False,
+        token_pattern: str = r"(?u)\b\w\w+\b",
+        filters: Optional[MetadataFilters] = None,
         # deprecated
         tokenizer: Optional[Callable[[str], List[str]]] = None,
     ) -> "BM25Retriever":
@@ -111,9 +185,9 @@ class BM25Retriever(BaseRetriever):
         if docstore is not None:
             nodes = cast(List[BaseNode], list(docstore.docs.values()))
 
-        assert (
-            nodes is not None
-        ), "Please pass exactly one of index, nodes, or docstore."
+        assert nodes is not None, (
+            "Please pass exactly one of index, nodes, or docstore."
+        )
 
         return cls(
             nodes=nodes,
@@ -121,25 +195,52 @@ class BM25Retriever(BaseRetriever):
             language=language,
             similarity_top_k=similarity_top_k,
             verbose=verbose,
+            skip_stemming=skip_stemming,
+            token_pattern=token_pattern,
+            filters=filters,
         )
 
-    def persist(self, path: str, **kwargs: Any) -> None:
+    def get_persist_args(self) -> Dict[str, Any]:
+        """Get Persist Args Dict to Save."""
+        return {
+            DEFAULT_PERSIST_ARGS[key]: getattr(self, key)
+            for key in DEFAULT_PERSIST_ARGS
+            if hasattr(self, key)
+        }
+
+    def persist(self, path: str, encoding: str = "utf-8", **kwargs: Any) -> None:
         """Persist the retriever to a directory."""
         self.bm25.save(path, corpus=self.corpus, **kwargs)
+        with open(
+            os.path.join(path, DEFAULT_PERSIST_FILENAME), "w", encoding=encoding
+        ) as f:
+            json.dump(self.get_persist_args(), f, indent=2)
 
     @classmethod
-    def from_persist_dir(cls, path: str, **kwargs: Any) -> "BM25Retriever":
+    def from_persist_dir(
+        cls, path: str, encoding: str = "utf-8", **kwargs: Any
+    ) -> "BM25Retriever":
         """Load the retriever from a directory."""
         bm25 = bm25s.BM25.load(path, load_corpus=True, **kwargs)
-        return cls(existing_bm25=bm25)
+        with open(os.path.join(path, DEFAULT_PERSIST_FILENAME), encoding=encoding) as f:
+            retriever_data = json.load(f)
+        return cls(existing_bm25=bm25, **retriever_data)
 
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         query = query_bundle.query_str
         tokenized_query = bm25s.tokenize(
-            query, stemmer=self.stemmer, show_progress=self._verbose
+            query,
+            stemmer=self.stemmer if not self.skip_stemming else None,
+            token_pattern=self.token_pattern,
+            show_progress=self._verbose,
         )
         indexes, scores = self.bm25.retrieve(
-            tokenized_query, k=self.similarity_top_k, show_progress=self._verbose
+            tokenized_query,
+            k=self.similarity_top_k,
+            show_progress=self._verbose,
+            weight_mask=np.array(self.corpus_weight_mask)
+            if self.corpus_weight_mask
+            else None,
         )
 
         # batched, but only one query

@@ -40,7 +40,8 @@ def yi_modelname_to_context_size(modelname: str) -> int:
 
 
 class Yi(OpenAI):
-    """Yi LLM.
+    """
+    Yi LLM.
 
     Examples:
         `pip install llama-index-llms-yi`
@@ -54,22 +55,21 @@ class Yi(OpenAI):
         response = llm.complete("Hi, who are you?")
         print(response)
         ```
+
     """
 
     model: str = Field(default=DEFAULT_YI_MODEL, description="The Yi model to use.")
     context_window: int = Field(
         default=yi_modelname_to_context_size(DEFAULT_YI_MODEL),
-        description=LLMMetadata.__fields__["context_window"].field_info.description,
+        description=LLMMetadata.model_fields["context_window"].description,
     )
     is_chat_model: bool = Field(
         default=True,
-        description=LLMMetadata.__fields__["is_chat_model"].field_info.description,
+        description=LLMMetadata.model_fields["is_chat_model"].description,
     )
     is_function_calling_model: bool = Field(
         default=False,
-        description=LLMMetadata.__fields__[
-            "is_function_calling_model"
-        ].field_info.description,
+        description=LLMMetadata.model_fields["is_function_calling_model"].description,
     )
     tokenizer: Union[Tokenizer, str, None] = Field(
         default=None,

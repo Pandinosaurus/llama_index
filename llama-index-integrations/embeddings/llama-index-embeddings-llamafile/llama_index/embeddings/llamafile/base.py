@@ -11,7 +11,8 @@ DEFAULT_REQUEST_TIMEOUT = 30.0
 
 
 class LlamafileEmbedding(BaseEmbedding):
-    """Class for llamafile embeddings.
+    """
+    Class for llamafile embeddings.
 
     llamafile lets you distribute and run large language models with a
     single file.
@@ -43,7 +44,11 @@ class LlamafileEmbedding(BaseEmbedding):
         callback_manager: Optional[CallbackManager] = None,
         **kwargs,
     ) -> None:
-        super().__init__(base_url=base_url, callback_manager=callback_manager, **kwargs)
+        super().__init__(
+            base_url=base_url,
+            callback_manager=callback_manager or CallbackManager([]),
+            **kwargs,
+        )
 
     @classmethod
     def class_name(cls) -> str:

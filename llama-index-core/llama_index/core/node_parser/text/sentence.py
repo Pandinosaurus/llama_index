@@ -1,4 +1,5 @@
 """Sentence splitter."""
+
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 
@@ -6,7 +7,9 @@ from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from llama_index.core.constants import DEFAULT_CHUNK_SIZE
-from llama_index.core.node_parser.interface import MetadataAwareTextSplitter
+from llama_index.core.node_parser.interface import (
+    MetadataAwareTextSplitter,
+)
 from llama_index.core.node_parser.node_utils import default_id_func
 from llama_index.core.node_parser.text.utils import (
     split_by_char,
@@ -14,11 +17,10 @@ from llama_index.core.node_parser.text.utils import (
     split_by_sentence_tokenizer,
     split_by_sep,
 )
-from llama_index.core.schema import Document
 from llama_index.core.utils import get_tokenizer
 
 SENTENCE_CHUNK_OVERLAP = 200
-CHUNKING_REGEX = "[^,.;。？！]+[,.;。？！]?"
+CHUNKING_REGEX = "[^,.;。？！]+[,.;。？！]?|[,.;。？！]"
 DEFAULT_PARAGRAPH_SEP = "\n\n\n"
 
 
@@ -30,7 +32,8 @@ class _Split:
 
 
 class SentenceSplitter(MetadataAwareTextSplitter):
-    """Parse text with a preference for complete sentences.
+    """
+    Parse text with a preference for complete sentences.
 
     In general, this class tries to keep sentences and paragraphs together. Therefore
     compared to the original TokenTextSplitter, there are less likely to be
@@ -45,7 +48,7 @@ class SentenceSplitter(MetadataAwareTextSplitter):
     chunk_overlap: int = Field(
         default=SENTENCE_CHUNK_OVERLAP,
         description="The token overlap of each chunk when splitting.",
-        gte=0,
+        ge=0,
     )
     separator: str = Field(
         default=" ", description="Default separator for splitting into words"
@@ -53,7 +56,7 @@ class SentenceSplitter(MetadataAwareTextSplitter):
     paragraph_separator: str = Field(
         default=DEFAULT_PARAGRAPH_SEP, description="Separator between paragraphs."
     )
-    secondary_chunking_regex: str = Field(
+    secondary_chunking_regex: Optional[str] = Field(
         default=CHUNKING_REGEX, description="Backup regex for splitting into sentences."
     )
 
@@ -70,11 +73,11 @@ class SentenceSplitter(MetadataAwareTextSplitter):
         tokenizer: Optional[Callable] = None,
         paragraph_separator: str = DEFAULT_PARAGRAPH_SEP,
         chunking_tokenizer_fn: Optional[Callable[[str], List[str]]] = None,
-        secondary_chunking_regex: str = CHUNKING_REGEX,
+        secondary_chunking_regex: Optional[str] = CHUNKING_REGEX,
         callback_manager: Optional[CallbackManager] = None,
         include_metadata: bool = True,
         include_prev_next_rel: bool = True,
-        id_func: Optional[Callable[[int, Document], str]] = None,
+        id_func: Optional[Callable] = None,
     ):
         """Initialize with parameters."""
         if chunk_overlap > chunk_size:
@@ -83,24 +86,7 @@ class SentenceSplitter(MetadataAwareTextSplitter):
                 f"({chunk_size}), should be smaller."
             )
         id_func = id_func or default_id_func
-
         callback_manager = callback_manager or CallbackManager([])
-        self._chunking_tokenizer_fn = (
-            chunking_tokenizer_fn or split_by_sentence_tokenizer()
-        )
-        self._tokenizer = tokenizer or get_tokenizer()
-
-        self._split_fns = [
-            split_by_sep(paragraph_separator),
-            self._chunking_tokenizer_fn,
-        ]
-
-        self._sub_sentence_split_fns = [
-            split_by_regex(secondary_chunking_regex),
-            split_by_sep(separator),
-            split_by_char(),
-        ]
-
         super().__init__(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -112,6 +98,27 @@ class SentenceSplitter(MetadataAwareTextSplitter):
             include_prev_next_rel=include_prev_next_rel,
             id_func=id_func,
         )
+        self._chunking_tokenizer_fn = (
+            chunking_tokenizer_fn or split_by_sentence_tokenizer()
+        )
+        self._tokenizer = tokenizer or get_tokenizer()
+
+        self._split_fns = [
+            split_by_sep(paragraph_separator),
+            self._chunking_tokenizer_fn,
+        ]
+
+        if secondary_chunking_regex:
+            self._sub_sentence_split_fns = [
+                split_by_regex(secondary_chunking_regex),
+                split_by_sep(separator),
+                split_by_char(),
+            ]
+        else:
+            self._sub_sentence_split_fns = [
+                split_by_sep(separator),
+                split_by_char(),
+            ]
 
     @classmethod
     def from_defaults(
@@ -189,7 +196,8 @@ class SentenceSplitter(MetadataAwareTextSplitter):
         return chunks
 
     def _split(self, text: str, chunk_size: int) -> List[_Split]:
-        r"""Break text into splits that are smaller than chunk size.
+        r"""
+        Break text into splits that are smaller than chunk size.
 
         The order of splitting is:
         1. split by paragraph separator
@@ -208,6 +216,20 @@ class SentenceSplitter(MetadataAwareTextSplitter):
         for text_split_by_fns in text_splits_by_fns:
             token_size = self._token_size(text_split_by_fns)
             if token_size <= chunk_size:
+                text_splits.append(
+                    _Split(
+                        text_split_by_fns,
+                        is_sentence=is_sentence,
+                        token_size=token_size,
+                    )
+                )
+            elif len(text_splits_by_fns) == 1:
+                # Could not split any further (a single indivisible unit larger
+                # than chunk_size, e.g. a multi-token CJK / emoji character with
+                # a small chunk_size). Recursing on the same text loops forever
+                # and raises RecursionError, so keep it as an oversized split --
+                # _merge() then raises the intended "Single token exceeded chunk
+                # size" ValueError instead of crashing.
                 text_splits.append(
                     _Split(
                         text_split_by_fns,
@@ -240,30 +262,37 @@ class SentenceSplitter(MetadataAwareTextSplitter):
             new_chunk = True
 
             # add overlap to the next chunk using the last one first
-            # there is a small issue with this logic. If the chunk directly after
-            # the overlap is really big, then we could go over the chunk_size, and
-            # in theory the correct thing to do would be to remove some/all of the
-            # overlap. However, it would complicate the logic further without
-            # much real world benefit, so it's not implemented now.
             if len(last_chunk) > 0:
                 last_index = len(last_chunk) - 1
                 while (
                     last_index >= 0
                     and cur_chunk_len + last_chunk[last_index][1] <= self.chunk_overlap
                 ):
-                    text, length = last_chunk[last_index]
-                    cur_chunk_len += length
-                    cur_chunk.insert(0, (text, length))
+                    overlap_text, overlap_length = last_chunk[last_index]
+                    cur_chunk_len += overlap_length
+                    cur_chunk.insert(0, (overlap_text, overlap_length))
                     last_index -= 1
 
-        while len(splits) > 0:
-            cur_split = splits[0]
+        split_idx = 0
+        while split_idx < len(splits):
+            cur_split = splits[split_idx]
             if cur_split.token_size > chunk_size:
                 raise ValueError("Single token exceeded chunk size")
             if cur_chunk_len + cur_split.token_size > chunk_size and not new_chunk:
                 # if adding split to current chunk exceeds chunk size: close out chunk
                 close_chunk()
             else:
+                # If this is a new chunk with overlap, and adding the split would
+                # exceed chunk_size, remove overlap to make room
+                if new_chunk and cur_chunk_len + cur_split.token_size > chunk_size:
+                    # Remove overlap from the beginning until split fits
+                    while (
+                        len(cur_chunk) > 0
+                        and cur_chunk_len + cur_split.token_size > chunk_size
+                    ):
+                        _, length = cur_chunk.pop(0)
+                        cur_chunk_len -= length
+
                 if (
                     cur_split.is_sentence
                     or cur_chunk_len + cur_split.token_size <= chunk_size
@@ -272,7 +301,7 @@ class SentenceSplitter(MetadataAwareTextSplitter):
                     # add split to chunk
                     cur_chunk_len += cur_split.token_size
                     cur_chunk.append((cur_split.text, cur_split.token_size))
-                    splits.pop(0)
+                    split_idx += 1
                     new_chunk = False
                 else:
                     # close out chunk
@@ -287,7 +316,8 @@ class SentenceSplitter(MetadataAwareTextSplitter):
         return self._postprocess_chunks(chunks)
 
     def _postprocess_chunks(self, chunks: List[str]) -> List[str]:
-        """Post-process chunks.
+        """
+        Post-process chunks.
         Remove whitespace only chunks and remove leading and trailing whitespace.
         """
         new_chunks = []

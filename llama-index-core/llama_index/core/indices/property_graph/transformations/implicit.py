@@ -1,5 +1,5 @@
 from tqdm import tqdm
-from typing import Any, List
+from typing import Any, Sequence
 
 from llama_index.core.schema import TransformComponent, BaseNode, NodeRelationship
 from llama_index.core.graph_stores.types import Relation, KG_NODES_KEY, KG_RELATIONS_KEY
@@ -10,7 +10,8 @@ def get_node_rel_string(relationship: NodeRelationship) -> str:
 
 
 class ImplicitPathExtractor(TransformComponent):
-    """Extract edges from node relationships.
+    """
+    Extract edges from node relationships.
 
     Uses `node.relationships` to extract relations between nodes.
     """
@@ -20,8 +21,8 @@ class ImplicitPathExtractor(TransformComponent):
         return "ImplicitPathExtractor"
 
     def __call__(
-        self, nodes: List[BaseNode], show_progress: bool = False, **kwargs: Any
-    ) -> List[BaseNode]:
+        self, nodes: Sequence[BaseNode], show_progress: bool = False, **kwargs: Any
+    ) -> Sequence[BaseNode]:
         """Extract edges from node relationships."""
         if show_progress:
             nodes = tqdm(nodes, desc="Extracting implicit paths")

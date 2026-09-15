@@ -45,13 +45,15 @@ logger = logging.getLogger(__name__)
 
 
 class IpexLLM(CustomLLM):
-    r"""IPEX-LLM.
+    r"""
+    IPEX-LLM.
 
     Example:
         .. code-block:: python
 
             from llama_index.llms.ipex_llm import IpexLLM
             llm = IpexLLM(model_path="/path/to/llama/model")
+
     """
 
     model_name: str = Field(
@@ -64,7 +66,7 @@ class IpexLLM(CustomLLM):
     load_in_4bit: bool = Field(
         default=True,
         description=(
-            "Whether to load model in 4bit." "Unused if `load_in_low_bit` is not None."
+            "Whether to load model in 4bit.Unused if `load_in_low_bit` is not None."
         ),
     )
     load_in_low_bit: str = Field(
@@ -123,7 +125,7 @@ class IpexLLM(CustomLLM):
     is_chat_model: bool = Field(
         default=False,
         description=(
-            LLMMetadata.__fields__["is_chat_model"].field_info.description
+            LLMMetadata.__fields__["is_chat_model"].description
             + " Be sure to verify that you either pass an appropriate tokenizer "
             "that can convert prompts to properly formatted chat messages or a "
             "`messages_to_prompt` that does so."
@@ -187,13 +189,14 @@ class IpexLLM(CustomLLM):
 
         Returns:
             None.
+
         """
         model_kwargs = model_kwargs or {}
 
         if model:
-            self._model = model
+            model = model
         else:
-            self._model = self._load_model(
+            model = self._load_model(
                 low_bit_model, load_in_4bit, load_in_low_bit, model_name, model_kwargs
             )
         if device_map not in ["cpu", "xpu"] and not device_map.startswith("xpu:"):
@@ -202,10 +205,10 @@ class IpexLLM(CustomLLM):
                 f"or 'xpu:<device_id>', but you have: {device_map}."
             )
         if "xpu" in device_map:
-            self._model = self._model.to(device_map)
+            model = model.to(device_map)
 
         # check context_window
-        config_dict = self._model.config.to_dict()
+        config_dict = model.config.to_dict()
         model_context_window = int(
             config_dict.get("max_position_embeddings", context_window)
         )
@@ -222,14 +225,14 @@ class IpexLLM(CustomLLM):
             tokenizer_kwargs["max_length"] = context_window
 
         if tokenizer:
-            self._tokenizer = tokenizer
+            tokenizer = tokenizer
         else:
             try:
-                self._tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer = AutoTokenizer.from_pretrained(
                     tokenizer_name, **tokenizer_kwargs
                 )
             except Exception:
-                self._tokenizer = LlamaTokenizer.from_pretrained(
+                tokenizer = LlamaTokenizer.from_pretrained(
                     tokenizer_name, trust_remote_code=True
                 )
 
@@ -242,8 +245,8 @@ class IpexLLM(CustomLLM):
         # setup stopping criteria
         stopping_ids_list = stopping_ids or []
 
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         class StopOnTokens(StoppingCriteria):
             def __call__(
@@ -257,7 +260,7 @@ class IpexLLM(CustomLLM):
                         return True
                 return False
 
-        self._stopping_criteria = StoppingCriteriaList([StopOnTokens()])
+        stopping_criteria = StoppingCriteriaList([StopOnTokens()])
 
         messages_to_prompt = messages_to_prompt or self._tokenizer_messages_to_prompt
 
@@ -279,6 +282,10 @@ class IpexLLM(CustomLLM):
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
         )
+
+        self._model = model
+        self._tokenizer = tokenizer
+        self._stopping_criteria = stopping_criteria
 
     @classmethod
     def from_model_id(
@@ -450,6 +457,7 @@ class IpexLLM(CustomLLM):
 
         Returns:
             Str of response.
+
         """
         if hasattr(self._tokenizer, "apply_chat_template"):
             messages_dict = [
@@ -489,6 +497,7 @@ class IpexLLM(CustomLLM):
 
         Returns:
             CompletionReponse after generation.
+
         """
         if not formatted:
             prompt = self.completion_to_prompt(prompt)
@@ -524,6 +533,7 @@ class IpexLLM(CustomLLM):
 
         Returns:
             CompletionReponse after generation.
+
         """
         from transformers import TextIteratorStreamer
 

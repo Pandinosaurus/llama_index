@@ -1,9 +1,9 @@
 """Pydantic output parser."""
 
 import json
-from typing import Any, List, Optional, Type
+from typing import Any, Generic, List, Optional, Type
 
-from llama_index.core.output_parsers.base import ChainableOutputParser
+from llama_index.core.output_parsers import BaseOutputParser
 from llama_index.core.output_parsers.utils import extract_json_str
 from llama_index.core.types import Model
 
@@ -15,8 +15,9 @@ Output a valid JSON object but do not repeat the schema.
 """
 
 
-class PydanticOutputParser(ChainableOutputParser):
-    """Pydantic Output Parser.
+class PydanticOutputParser(BaseOutputParser, Generic[Model]):
+    """
+    Pydantic Output Parser.
 
     Args:
         output_cls (BaseModel): Pydantic output class.
@@ -45,11 +46,11 @@ class PydanticOutputParser(ChainableOutputParser):
 
     def get_format_string(self, escape_json: bool = True) -> str:
         """Format string."""
-        schema_dict = self._output_cls.schema()
+        schema_dict = self._output_cls.model_json_schema()
         for key in self._excluded_schema_keys_from_format:
             del schema_dict[key]
 
-        schema_str = json.dumps(schema_dict)
+        schema_str = json.dumps(schema_dict, ensure_ascii=False)
         output_str = self._pydantic_format_tmpl.format(schema=schema_str)
         if escape_json:
             return output_str.replace("{", "{{").replace("}", "}}")
@@ -59,7 +60,7 @@ class PydanticOutputParser(ChainableOutputParser):
     def parse(self, text: str) -> Any:
         """Parse, validate, and correct errors programmatically."""
         json_str = extract_json_str(text)
-        return self._output_cls.parse_raw(json_str)
+        return self._output_cls.model_validate_json(json_str)
 
     def format(self, query: str) -> str:
         """Format a query with structured output formatting instructions."""

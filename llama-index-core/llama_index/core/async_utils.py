@@ -1,6 +1,8 @@
 """Async utils."""
 
 import asyncio
+import contextvars
+import concurrent.futures
 from itertools import zip_longest
 from typing import Any, Coroutine, Iterable, List, Optional, TypeVar
 
@@ -9,7 +11,7 @@ import llama_index.core.instrumentation as instrument
 dispatcher = instrument.get_dispatcher(__name__)
 
 
-def asyncio_module(show_progress: bool = False) -> Any:
+def get_asyncio_module(show_progress: bool = False) -> Any:
     if show_progress:
         from tqdm.asyncio import tqdm_asyncio
 
@@ -20,20 +22,52 @@ def asyncio_module(show_progress: bool = False) -> Any:
     return module
 
 
+def asyncio_module(show_progress: bool = False) -> Any:
+    import warnings
+
+    warnings.warn(
+        "asyncio_module() is deprecated and will be removed in a future release. "
+        "Use get_asyncio_module() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_asyncio_module(show_progress=show_progress)
+
+
 def asyncio_run(coro: Coroutine) -> Any:
-    """Gets an existing event loop to run the coroutine.
+    """
+    Gets an existing event loop to run the coroutine.
 
     If there is no existing event loop, creates a new one.
+    If an event loop is already running, uses threading to run in a separate thread.
     """
     try:
         # Check if there's an existing event loop
         loop = asyncio.get_event_loop()
 
-        # If we're here, there's an existing loop but it's not running
-        return loop.run_until_complete(coro)
+        # Check if the loop is already running
+        if loop.is_running():
+            # If loop is already running, run in a separate thread
+            # Snapshot the current context so we can propagate contextvars
+            ctx = contextvars.copy_context()
+
+            def run_coro_in_thread() -> Any:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return ctx.run(new_loop.run_until_complete, coro)
+                finally:
+                    new_loop.close()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_coro_in_thread)
+                return future.result()
+        else:
+            # If we're here, there's an existing loop but it's not running
+            return loop.run_until_complete(coro)
 
     except RuntimeError as e:
-        # If we can't get the event loop, we're likely in a different thread, or its already running
+        # If we can't get the event loop, we're likely in a different thread
         try:
             return asyncio.run(coro)
         except RuntimeError as e:
@@ -41,10 +75,6 @@ def asyncio_run(coro: Coroutine) -> Any:
                 "Detected nested async. Please use nest_asyncio.apply() to allow nested event loops."
                 "Or, use async entry methods like `aquery()`, `aretriever`, `achat`, etc."
             )
-
-    except Exception as e:
-        # Catch any other exceptions and re-raise with more context
-        raise type(e)(f"Error running coroutine: {e!s}") from e
 
 
 def run_async_tasks(
@@ -100,17 +130,6 @@ async def batch_gather(
     return output
 
 
-def get_asyncio_module(show_progress: bool = False) -> Any:
-    if show_progress:
-        from tqdm.asyncio import tqdm_asyncio
-
-        module = tqdm_asyncio
-    else:
-        module = asyncio
-
-    return module
-
-
 DEFAULT_NUM_WORKERS = 4
 
 T = TypeVar("T")
@@ -123,7 +142,8 @@ async def run_jobs(
     workers: int = DEFAULT_NUM_WORKERS,
     desc: Optional[str] = None,
 ) -> List[T]:
-    """Run jobs.
+    """
+    Run jobs.
 
     Args:
         jobs (List[Coroutine]):
@@ -134,6 +154,7 @@ async def run_jobs(
     Returns:
         List[Any]:
             List of results.
+
     """
     semaphore = asyncio.Semaphore(workers)
 

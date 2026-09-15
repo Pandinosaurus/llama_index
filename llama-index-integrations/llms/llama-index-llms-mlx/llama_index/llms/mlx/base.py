@@ -41,7 +41,8 @@ DEFAULT_MLX_MODEL = "microsoft/phi-2"
 
 
 class MLXLLM(CustomLLM):
-    r"""MLX LLM.
+    r"""
+    MLX LLM.
 
     Examples:
         Thanks to the HuggingFace team for the example code.
@@ -90,6 +91,7 @@ class MLXLLM(CustomLLM):
         response = llm.complete("What is the meaning of life?")
         print(str(response))
         ```
+
     """
 
     model_name: str = Field(
@@ -170,10 +172,10 @@ class MLXLLM(CustomLLM):
         """Initialize params."""
         model_kwargs = model_kwargs or {}
         if model is None:
-            self._model, self._tokenizer = load(model_name, **model_kwargs)
+            model, tokenizer = load(model_name, **model_kwargs)
         else:
-            self._model = model
-            self._tokenizer = tokenizer
+            model = model
+            tokenizer = tokenizer
         # check context_window
 
         tokenizer_kwargs = tokenizer_kwargs or {}
@@ -202,6 +204,8 @@ class MLXLLM(CustomLLM):
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
         )
+        self._model = model
+        self._tokenizer = tokenizer
 
     @classmethod
     def class_name(cls) -> str:

@@ -1,17 +1,37 @@
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+from typing_extensions import Annotated
 
 import fsspec
-from llama_index.core.bridge.pydantic import Field
+from llama_index.core.bridge.pydantic import Field, WrapSerializer
 from llama_index.core.llms import ChatMessage
 from llama_index.core.storage.chat_store.base import BaseChatStore
 
 
-class SimpleChatStore(BaseChatStore):
-    """Simple chat store."""
+def chat_message_serialization(
+    chat_message: Any, handler: Any, info: Any
+) -> Dict[str, Any]:
+    partial_result = handler(chat_message, info)
 
-    store: Dict[str, List[ChatMessage]] = Field(default_factory=dict)
+    for key, value in partial_result.get("additional_kwargs", {}).items():
+        value = chat_message._recursive_serialization(value)
+        if not isinstance(value, (str, int, float, bool, dict, list, type(None))):
+            raise ValueError(f"Failed to serialize additional_kwargs value: {value}")
+        partial_result["additional_kwargs"][key] = value
+
+    return partial_result
+
+
+AnnotatedChatMessage = Annotated[
+    ChatMessage, WrapSerializer(chat_message_serialization)
+]
+
+
+class SimpleChatStore(BaseChatStore):
+    """Simple chat store. Async methods provide same functionality as sync methods in this class."""
+
+    store: Dict[str, List[AnnotatedChatMessage]] = Field(default_factory=dict)
 
     @classmethod
     def class_name(cls) -> str:
@@ -70,8 +90,10 @@ class SimpleChatStore(BaseChatStore):
         if not fs.exists(dirpath):
             fs.makedirs(dirpath)
 
-        with fs.open(persist_path, "w") as f:
-            f.write(json.dumps(self.json()))
+        with fs.open(persist_path, "w", encoding="utf-8") as f:
+            # model_dump_json writes non-ascii characters as-is, while BaseComponent.json()
+            # escapes them to \uXXXX sequences (json.dumps default).
+            f.write(self.model_dump_json())
 
     @classmethod
     def from_persist_path(
@@ -83,6 +105,10 @@ class SimpleChatStore(BaseChatStore):
         fs = fs or fsspec.filesystem("file")
         if not fs.exists(persist_path):
             return cls()
-        with fs.open(persist_path, "r") as f:
+        with fs.open(persist_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return cls.parse_raw(data)
+
+        if isinstance(data, str):
+            return cls.model_validate_json(data)
+        else:
+            return cls.model_validate(data)

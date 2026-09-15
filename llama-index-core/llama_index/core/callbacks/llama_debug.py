@@ -15,7 +15,8 @@ from llama_index.core.callbacks.schema import (
 
 
 class LlamaDebugHandler(PythonicallyPrintingBaseHandler):
-    """Callback handler that keeps track of debug info.
+    """
+    Callback handler that keeps track of debug info.
 
     NOTE: this is a beta feature. The usage within our codebase, and the interface
     may change.
@@ -63,7 +64,8 @@ class LlamaDebugHandler(PythonicallyPrintingBaseHandler):
         parent_id: str = "",
         **kwargs: Any,
     ) -> str:
-        """Store event start data by event type.
+        """
+        Store event start data by event type.
 
         Args:
             event_type (CBEventType): event type to store.
@@ -85,7 +87,8 @@ class LlamaDebugHandler(PythonicallyPrintingBaseHandler):
         event_id: str = "",
         **kwargs: Any,
     ) -> None:
-        """Store event end data by event type.
+        """
+        Store event end data by event type.
 
         Args:
             event_type (CBEventType): event type to store.
@@ -121,6 +124,9 @@ class LlamaDebugHandler(PythonicallyPrintingBaseHandler):
         self, event_pairs: List[List[CBEvent]]
     ) -> EventStats:
         """Calculate time-based stats for a set of event pairs."""
+        if not event_pairs:
+            return EventStats(total_secs=0.0, average_secs=0.0, total_count=0)
+
         total_secs = 0.0
         for event_pair in event_pairs:
             start_time = datetime.strptime(event_pair[0].time, TIMESTAMP_FORMAT)

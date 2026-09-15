@@ -15,7 +15,7 @@ class IntelEmbedding(BaseEmbedding):
     folder_name: str = Field(description="Folder name to load from.")
     max_length: int = Field(description="Maximum length of input.")
     pooling: str = Field(description="Pooling strategy. One of ['cls', 'mean'].")
-    normalize: str = Field(default=True, description="Normalize embeddings or not.")
+    normalize: bool = Field(default=True, description="Normalize embeddings or not.")
     query_instruction: Optional[str] = Field(
         description="Instruction to prepend to query text."
     )
@@ -23,7 +23,7 @@ class IntelEmbedding(BaseEmbedding):
         description="Instruction to prepend to text."
     )
     cache_folder: Optional[str] = Field(
-        description="Cache folder for huggingface files."
+        description="Cache folder for huggingface files.", default=None
     )
 
     _model: Any = PrivateAttr()
@@ -38,6 +38,7 @@ class IntelEmbedding(BaseEmbedding):
         normalize: bool = True,
         query_instruction: Optional[str] = None,
         text_instruction: Optional[str] = None,
+        cache_folder: Optional[str] = None,
         model: Optional[Any] = None,
         tokenizer: Optional[Any] = None,
         embed_batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
@@ -53,20 +54,20 @@ class IntelEmbedding(BaseEmbedding):
                 "optimum-intel neural-compressor intel_extension_for_pytorch`"
             )
 
-        self._model = model or IPEXModel.from_pretrained(folder_name)
-        self._tokenizer = tokenizer or AutoTokenizer.from_pretrained(folder_name)
-        self._device = device or infer_torch_device()
+        device = device or infer_torch_device()
+        model = model or IPEXModel.from_pretrained(folder_name).to(device)
+        tokenizer = tokenizer or AutoTokenizer.from_pretrained(folder_name)
 
         if max_length is None:
             try:
-                max_length = int(self._model.config.max_position_embeddings)
+                max_length = int(model.config.max_position_embeddings)
             except Exception:
                 raise ValueError(
                     "Unable to find max_length from model config. "
                     "Please provide max_length."
                 )
             try:
-                max_length = min(max_length, int(self._tokenizer.model_max_length))
+                max_length = min(max_length, int(tokenizer.model_max_length))
             except Exception as exc:
                 print(f"An error occurred while retrieving tokenizer max length: {exc}")
 
@@ -83,6 +84,9 @@ class IntelEmbedding(BaseEmbedding):
             query_instruction=query_instruction,
             text_instruction=text_instruction,
         )
+        self._model = model
+        self._tokenizer = tokenizer
+        self._device = device
 
     @classmethod
     def class_name(cls) -> str:
@@ -120,8 +124,8 @@ class IntelEmbedding(BaseEmbedding):
         )
         import torch
 
-        with torch.inference_mode(), torch.cpu.amp.autocast():
-            model_output = self._model(**encoded_input)
+        with torch.inference_mode(), torch.autocast(device_type=self._device):
+            model_output = self._model(**encoded_input.to(self._device))
 
         if self.pooling == "cls":
             embeddings = self._cls_pooling(model_output)

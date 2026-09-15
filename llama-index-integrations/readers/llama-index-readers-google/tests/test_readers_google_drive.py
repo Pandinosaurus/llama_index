@@ -2,7 +2,7 @@ import json
 import os
 import unittest
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 import pytest
 from google.oauth2.credentials import Credentials
@@ -120,3 +120,182 @@ class TestGoogleDriveReader(unittest.TestCase):
         mock_credentials.to_json.assert_not_called()
         assert result == mock_credentials
         assert os.path.exists(reader.token_path) is False
+
+    def test_get_relative_path(self):
+        # Mock the necessary objects and methods
+        mock_credentials = MagicMock()
+        mock_service = MagicMock()
+        GoogleDriveReader._get_credentials = MagicMock(return_value=mock_credentials)
+
+        reader = GoogleDriveReader(
+            client_config={
+                "client_id": "example_client_id",
+                "client_secret": "example_client_secret",
+            },
+        )
+
+        # Test case 1: Simple file without root_folder_id
+        file_id = "example_file_id"
+        mock_file_response = {"name": "test_file", "parents": ["parent_id"]}
+        mock_service.files().get().execute.return_value = mock_file_response
+
+        result = reader._get_relative_path(mock_service, file_id)
+        assert result == "test_file"
+
+        # Test case 2: File with path traversal to root_folder_id
+        root_folder_id = "root_folder_id"
+        mock_file_responses = [
+            {"name": "test_file", "parents": ["parent1_id"]},  # File
+            {"name": "parent1", "parents": ["parent2_id"]},  # Parent 1
+            {"name": "parent2", "parents": ["root_folder_id"]},  # Parent 2
+        ]
+
+        mock_service.files().get().execute.side_effect = mock_file_responses
+
+        result = reader._get_relative_path(mock_service, file_id, root_folder_id)
+        assert result == "parent2/parent1/test_file"
+
+        # Verify API calls
+        assert mock_service.files().get.call_count >= 1
+
+    def test_download_file(self):
+        mock_credentials = MagicMock()
+        mock_credentials.universe_domain = "googleapis.com"
+
+        mock_service = MagicMock()
+        mock_build = MagicMock(return_value=mock_service)
+
+        # setup a bunch of mocks to imitate calling Google Drive and downloading file
+        with (
+            patch("googleapiclient.discovery.build", mock_build),
+            patch("builtins.open", mock_open()) as mock_file,
+        ):
+            reader = GoogleDriveReader(
+                client_config={
+                    "client_id": "example_client_id",
+                    "client_secret": "example_client_secret",
+                },
+            )
+            reader._creds = mock_credentials
+
+            google_drive_id = "googledriveid"
+            mock_file_response = {
+                "name": "test_file.pdf",
+                "id": google_drive_id,
+                "mimeType": "application/pdf",
+            }
+            mock_service.files().get().execute.return_value = mock_file_response
+
+            mock_downloader = MagicMock()
+            mock_downloader.next_chunk.return_value = (None, True)
+
+            with patch(
+                "googleapiclient.http.MediaIoBaseDownload", return_value=mock_downloader
+            ):
+                filename = reader._download_file(google_drive_id, google_drive_id)
+
+            assert filename == google_drive_id + ".pdf"
+            # also should have tried to write the file
+            mock_file().write.assert_called_once()
+
+    def _reader(self):
+        return GoogleDriveReader(
+            client_config={
+                "client_id": "example_client_id",
+                "client_secret": "example_client_secret",
+            },
+        )
+
+    def test_load_data_returns_a_list_when_a_folder_load_fails(self):
+        """
+        A swallowed error must still produce a list, not None.
+
+        load_data is annotated and documented as returning List[Document], and
+        its own "neither folder_id nor file_ids" branch returns []. When
+        raise_errors is False (the default) an error used to fall off the end
+        of _load_from_folder, so callers doing `for doc in reader.load_data()`
+        got a TypeError far away from the failure that was actually logged.
+        """
+        reader = self._reader()
+        reader._creds = MagicMock()
+
+        with (
+            patch.object(reader, "_get_credentials", return_value=MagicMock()),
+            patch.object(
+                reader, "_get_fileids_meta", side_effect=RuntimeError("drive is down")
+            ),
+        ):
+            documents = reader.load_data(folder_id="some_folder")
+
+        assert documents == []
+
+    def test_load_data_returns_a_list_when_a_file_id_load_fails(self):
+        reader = self._reader()
+        reader._creds = MagicMock()
+
+        with (
+            patch.object(reader, "_get_credentials", return_value=MagicMock()),
+            patch.object(
+                reader, "_get_fileids_meta", side_effect=RuntimeError("drive is down")
+            ),
+        ):
+            documents = reader.load_data(file_ids=["some_file"])
+
+        assert documents == []
+
+    def test_load_data_still_raises_when_raise_errors_is_set(self):
+        """Opting in to raise_errors must keep propagating."""
+        reader = GoogleDriveReader(
+            client_config={
+                "client_id": "example_client_id",
+                "client_secret": "example_client_secret",
+            },
+            raise_errors=True,
+        )
+        reader._creds = MagicMock()
+
+        with (
+            patch.object(reader, "_get_credentials", return_value=MagicMock()),
+            patch.object(
+                reader, "_get_fileids_meta", side_effect=RuntimeError("drive is down")
+            ),
+            pytest.raises(RuntimeError, match="drive is down"),
+        ):
+            reader.load_data(folder_id="some_folder")
+
+    def test_download_file_returns_none_when_the_error_is_swallowed(self):
+        reader = self._reader()
+        reader._creds = MagicMock()
+
+        with patch("googleapiclient.discovery.build", side_effect=RuntimeError("boom")):
+            assert reader._download_file("fileid", "filename") is None
+
+    def test_a_failed_download_does_not_poison_the_metadata_map(self):
+        """A file that failed to download is skipped rather than keyed by None."""
+        reader = self._reader()
+        reader._creds = MagicMock()
+
+        captured = {}
+
+        def fake_reader(temp_dir, file_extractor=None, file_metadata=None):
+            loader = MagicMock()
+            loader.load_data.return_value = []
+            captured["file_metadata"] = file_metadata
+            return loader
+
+        fileids_meta = [["id1", "author", "path", "mime", "created", "modified"]]
+
+        with (
+            patch.object(reader, "_download_file", return_value=None),
+            patch(
+                "llama_index.readers.google.drive.base.SimpleDirectoryReader",
+                side_effect=fake_reader,
+            ),
+        ):
+            documents = reader._load_data_fileids_meta(fileids_meta)
+
+        assert documents == []
+        with pytest.raises(KeyError):
+            # nothing was recorded for the failed file, and in particular
+            # nothing was recorded under the key None
+            captured["file_metadata"](None)

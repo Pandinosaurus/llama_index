@@ -1,8 +1,18 @@
 import fsspec
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Set, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Set,
+    Sequence,
+    Protocol,
+    runtime_checkable,
+)
 
-from llama_index.core.bridge.pydantic import BaseModel, Field
+from llama_index.core.bridge.pydantic import BaseModel, Field, SerializeAsAny
 from llama_index.core.graph_stores.prompts import DEFAULT_CYPHER_TEMPALTE
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.schema import BaseNode, MetadataMode
@@ -14,7 +24,7 @@ from llama_index.core.vector_stores.types import VectorStoreQuery
 
 DEFAULT_PERSIST_DIR = "./storage"
 DEFAULT_PERSIST_FNAME = "graph_store.json"
-DEFUALT_PG_PERSIST_FNAME = "property_graph_store.json"
+DEFAULT_PG_PERSIST_FNAME = "property_graph_store.json"
 
 TRIPLET_SOURCE_KEY = "triplet_source_id"
 VECTOR_SOURCE_KEY = "vector_source_id"
@@ -53,6 +63,8 @@ class EntityNode(LabelledNode):
 
     def __str__(self) -> str:
         """Return the string representation of the node."""
+        if self.properties:
+            return f"{self.name} ({self.properties})"
         return self.name
 
     @property
@@ -91,6 +103,8 @@ class Relation(BaseModel):
 
     def __str__(self) -> str:
         """Return the string representation of the relation."""
+        if self.properties:
+            return f"{self.label} ({self.properties})"
         return self.label
 
     @property
@@ -105,8 +119,8 @@ Triplet = Tuple[LabelledNode, Relation, LabelledNode]
 class LabelledPropertyGraph(BaseModel):
     """In memory labelled property graph containing entities and relations."""
 
-    nodes: Dict[str, LabelledNode] = Field(default_factory=dict)
-    relations: Dict[str, Relation] = Field(default_factory=dict)
+    nodes: SerializeAsAny[Dict[str, LabelledNode]] = Field(default_factory=dict)
+    relations: SerializeAsAny[Dict[str, Relation]] = Field(default_factory=dict)
     triplets: Set[Tuple[str, str, str]] = Field(
         default_factory=set, description="List of triplets (subject, relation, object)."
     )
@@ -200,7 +214,8 @@ class LabelledPropertyGraph(BaseModel):
 
 @runtime_checkable
 class GraphStore(Protocol):
-    """Abstract graph store protocol.
+    """
+    Abstract graph store protocol.
 
     This protocol defines the interface for a graph store, which is responsible
     for storing and retrieving knowledge graph data.
@@ -215,6 +230,7 @@ class GraphStore(Protocol):
         persist: Callable[[str, Optional[fsspec.AbstractFileSystem]], None]:
             Persist the graph store to a file.
         get_schema: Callable[[bool], str]: Get the schema of the graph store.
+
     """
 
     schema: str = ""
@@ -258,7 +274,8 @@ class GraphStore(Protocol):
 
 
 class PropertyGraphStore(ABC):
-    """Abstract labelled graph store protocol.
+    """
+    Abstract labelled graph store protocol.
 
     This protocol defines the interface for a graph store, which is responsible
     for storing and retrieving knowledge graph data.
@@ -272,6 +289,7 @@ class PropertyGraphStore(ABC):
         delete: Callable[[str, str, str], None]: Delete a triplet.
         persist: Callable[[str, Optional[fsspec.AbstractFileSystem]], None]:
             Persist the graph store to a file.
+
     """
 
     supports_structured_queries: bool = False
@@ -281,7 +299,6 @@ class PropertyGraphStore(ABC):
     @property
     def client(self) -> Any:
         """Get client."""
-        ...
 
     @abstractmethod
     def get(
@@ -321,14 +338,14 @@ class PropertyGraphStore(ABC):
         for node in nodes:
             try:
                 converted_nodes.append(metadata_dict_to_node(node.properties))
-                converted_nodes[-1].set_content(node.text)
+                converted_nodes[-1].set_content(node.text)  # type: ignore
             except Exception:
                 continue
 
         return converted_nodes
 
     @abstractmethod
-    def upsert_nodes(self, nodes: List[LabelledNode]) -> None:
+    def upsert_nodes(self, nodes: Sequence[LabelledNode]) -> None:
         """Upsert nodes."""
         ...
 
@@ -368,7 +385,8 @@ class PropertyGraphStore(ABC):
         node_ids: Optional[List[str]] = None,
         ref_doc_ids: Optional[List[str]] = None,
     ) -> None:
-        """Delete llama-index nodes.
+        """
+        Delete llama-index nodes.
 
         Intended to delete any nodes in the graph store associated
         with the given llama-index node_ids or ref_doc_ids.
@@ -456,7 +474,7 @@ class PropertyGraphStore(ABC):
         for node in nodes:
             try:
                 converted_nodes.append(metadata_dict_to_node(node.properties))
-                converted_nodes[-1].set_content(node.text)
+                converted_nodes[-1].set_content(node.text)  # type: ignore
             except Exception:
                 continue
 

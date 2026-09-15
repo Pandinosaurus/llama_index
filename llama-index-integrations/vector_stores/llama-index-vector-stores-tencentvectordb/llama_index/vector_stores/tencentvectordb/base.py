@@ -1,4 +1,5 @@
-"""Tencent Vector store index.
+"""
+Tencent Vector store index.
 
 An index that is built with Tencent Vector Database.
 
@@ -91,7 +92,8 @@ class FilterField:
 
 
 class CollectionParams:
-    r"""Tencent vector DB Collection params.
+    r"""
+    Tencent vector DB Collection params.
     See the following documentation for details:
     https://cloud.tencent.com/document/product/1709/95826.
 
@@ -116,6 +118,7 @@ class CollectionParams:
              ...
              query = VectorStoreQuery(...)
              store.query(query, filter="age > 20 and age < 40 and name in (\"name1\", \"name2\")")
+
     """
 
     def __init__(
@@ -142,9 +145,15 @@ class CollectionParams:
         self.drop_exists = drop_exists
         self._filter_fields = filter_fields or []
 
+    @property
+    def filter_fields(self) -> List[FilterField]:
+        """Get the filter fields for the collection."""
+        return self._filter_fields
+
 
 class TencentVectorDB(BasePydanticVectorStore):
-    """Tencent Vector Store.
+    """
+    Tencent Vector Store.
 
     In this vector store, embeddings and docs are stored within a Collection.
     If the Collection does not exist, it will be automatically created.
@@ -173,6 +182,7 @@ class TencentVectorDB(BasePydanticVectorStore):
         # Create an instance of TencentVectorDB
         vector_store = TencentVectorDB(url=url, key=key, collection_params=collection_params)
         ```
+
     """
 
     stores_text: bool = True
@@ -278,7 +288,7 @@ class TencentVectorDB(BasePydanticVectorStore):
         collection_name: str = self._compute_collection_name(
             database_name, collection_params
         )
-        collection_description = collection_params.collection_description
+        collection_description = collection_params._collection_description
 
         if collection_params is None:
             raise ValueError(VALUE_NONE_ERROR.format("collection_params"))
@@ -300,9 +310,9 @@ class TencentVectorDB(BasePydanticVectorStore):
         database_name: str, collection_params: CollectionParams
     ) -> str:
         if database_name == DEFAULT_DATABASE_NAME:
-            return collection_params.collection_name
-        if collection_params.collection_name != DEFAULT_COLLECTION_NAME:
-            return collection_params.collection_name
+            return collection_params._collection_name
+        if collection_params._collection_name != DEFAULT_COLLECTION_NAME:
+            return collection_params._collection_name
         else:
             return database_name + "_" + DEFAULT_COLLECTION_NAME
 
@@ -426,7 +436,8 @@ class TencentVectorDB(BasePydanticVectorStore):
         nodes: List[BaseNode],
         **add_kwargs: Any,
     ) -> List[str]:
-        """Add nodes to index.
+        """
+        Add nodes to index.
 
         Args:
             nodes: List[BaseNode]: list of nodes with embeddings
@@ -493,7 +504,8 @@ class TencentVectorDB(BasePydanticVectorStore):
         return self._database.describe_collection(self._collection.collection_name)
 
     def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
-        """Query index for top k most similar nodes.
+        """
+        Query index for top k most similar nodes.
 
         Args:
             query (VectorStoreQuery): contains
@@ -509,6 +521,7 @@ class TencentVectorDB(BasePydanticVectorStore):
                using filter: " and ".join([f'{f.key} = "{f.value}"' for f in query.filters.filters])
             elif query.doc_ids:
                using filter: `doc_id in (query.doc_ids)`
+
         """
         search_filter = self._to_vdb_filter(query, **kwargs)
         results = self._collection.search(

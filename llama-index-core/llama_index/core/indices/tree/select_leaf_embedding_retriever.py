@@ -12,13 +12,14 @@ from llama_index.core.indices.tree.select_leaf_retriever import (
 from llama_index.core.indices.utils import get_sorted_node_list
 from llama_index.core.prompts import BasePromptTemplate
 from llama_index.core.schema import BaseNode, MetadataMode, QueryBundle
-from llama_index.core.settings import Settings, embed_model_from_settings_or_context
+from llama_index.core.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 
 class TreeSelectLeafEmbeddingRetriever(TreeSelectLeafRetriever):
-    """Tree select leaf embedding retriever.
+    """
+    Tree select leaf embedding retriever.
 
     This class traverses the index graph using the embedding similarity between the
     query and the node text.
@@ -68,15 +69,14 @@ class TreeSelectLeafEmbeddingRetriever(TreeSelectLeafRetriever):
             object_map=object_map,
             **kwargs,
         )
-        self._embed_model = embed_model or embed_model_from_settings_or_context(
-            Settings, index.service_context
-        )
+        self._embed_model = embed_model or Settings.embed_model
 
     def _query_level(
         self,
         cur_node_ids: Dict[int, str],
         query_bundle: QueryBundle,
         level: int = 0,
+        source_nodes: Optional[List[BaseNode]] = None,
     ) -> str:
         """Answer a query recursively."""
         cur_nodes = {
@@ -93,13 +93,17 @@ class TreeSelectLeafEmbeddingRetriever(TreeSelectLeafRetriever):
         result_response = None
         for node, index in zip(selected_nodes, selected_indices):
             logger.debug(
-                f">[Level {level}] Node [{index+1}] Summary text: "
+                f">[Level {level}] Node [{index + 1}] Summary text: "
                 f"{' '.join(node.get_content().splitlines())}"
             )
 
             # Get the response for the selected node
             result_response = self._query_with_selected_node(
-                node, query_bundle, level=level, prev_response=result_response
+                node,
+                query_bundle,
+                level=level,
+                prev_response=result_response,
+                source_nodes=source_nodes,
             )
 
         return cast(str, result_response)

@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Sequence, get_args
+from typing import Any, List, Optional, Sequence, Union
 
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -9,15 +9,13 @@ from llama_index.core.base.llms.types import (
     CompletionResponse,
     CompletionResponseAsyncGen,
     CompletionResponseGen,
+    ImageBlock,
 )
-from llama_index.core.base.query_pipeline.query import (
-    ChainableMixin,
-    InputKeys,
-    OutputKeys,
-    QueryComponent,
-    validate_and_convert_stringable,
+from llama_index.core.bridge.pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
 )
-from llama_index.core.bridge.pydantic import BaseModel, Field, validator
 from llama_index.core.callbacks import CallbackManager
 from llama_index.core.constants import (
     DEFAULT_CONTEXT_WINDOW,
@@ -25,11 +23,12 @@ from llama_index.core.constants import (
     DEFAULT_NUM_OUTPUTS,
 )
 from llama_index.core.instrumentation import DispatcherSpanMixin
-from llama_index.core.llms.callbacks import llm_completion_callback, llm_chat_callback
-from llama_index.core.schema import BaseComponent, ImageDocument
+from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_callback
+from llama_index.core.schema import BaseComponent, ImageNode
 
 
 class MultiModalLLMMetadata(BaseModel):
+    model_config = ConfigDict(protected_namespaces=("pydantic_model_",))
     context_window: Optional[int] = Field(
         default=DEFAULT_CONTEXT_WINDOW,
         description=(
@@ -73,21 +72,17 @@ class MultiModalLLMMetadata(BaseModel):
     )
 
 
-class MultiModalLLM(ChainableMixin, BaseComponent, DispatcherSpanMixin):
+class MultiModalLLM(BaseComponent, DispatcherSpanMixin):
     """Multi-Modal LLM interface."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     callback_manager: CallbackManager = Field(
         default_factory=CallbackManager, exclude=True
     )
 
-    class Config:
-        arbitrary_types_allowed = True
-
-    @validator("callback_manager", pre=True)
-    def _validate_callback_manager(cls, v: CallbackManager) -> CallbackManager:
-        if v is None:
-            return CallbackManager([])
-        return v
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Help static checkers understand this class hierarchy
+        super().__init__(*args, **kwargs)
 
     @property
     @abstractmethod
@@ -96,13 +91,19 @@ class MultiModalLLM(ChainableMixin, BaseComponent, DispatcherSpanMixin):
 
     @abstractmethod
     def complete(
-        self, prompt: str, image_documents: Sequence[ImageDocument], **kwargs: Any
+        self,
+        prompt: str,
+        image_documents: List[Union[ImageNode, ImageBlock]],
+        **kwargs: Any,
     ) -> CompletionResponse:
         """Completion endpoint for Multi-Modal LLM."""
 
     @abstractmethod
     def stream_complete(
-        self, prompt: str, image_documents: Sequence[ImageDocument], **kwargs: Any
+        self,
+        prompt: str,
+        image_documents: List[Union[ImageNode, ImageBlock]],
+        **kwargs: Any,
     ) -> CompletionResponseGen:
         """Streaming completion endpoint for Multi-Modal LLM."""
 
@@ -126,13 +127,19 @@ class MultiModalLLM(ChainableMixin, BaseComponent, DispatcherSpanMixin):
 
     @abstractmethod
     async def acomplete(
-        self, prompt: str, image_documents: Sequence[ImageDocument], **kwargs: Any
+        self,
+        prompt: str,
+        image_documents: List[Union[ImageNode, ImageBlock]],
+        **kwargs: Any,
     ) -> CompletionResponse:
         """Async completion endpoint for Multi-Modal LLM."""
 
     @abstractmethod
     async def astream_complete(
-        self, prompt: str, image_documents: Sequence[ImageDocument], **kwargs: Any
+        self,
+        prompt: str,
+        image_documents: List[Union[ImageNode, ImageBlock]],
+        **kwargs: Any,
     ) -> CompletionResponseAsyncGen:
         """Async streaming completion endpoint for Multi-Modal LLM."""
 
@@ -152,15 +159,7 @@ class MultiModalLLM(ChainableMixin, BaseComponent, DispatcherSpanMixin):
     ) -> ChatResponseAsyncGen:
         """Async streaming chat endpoint for Multi-Modal LLM."""
 
-    def _as_query_component(self, **kwargs: Any) -> QueryComponent:
-        """Return query component."""
-        if self.metadata.is_chat_model:
-            # TODO: we don't have a separate chat component
-            return MultiModalCompleteComponent(multi_modal_llm=self, **kwargs)
-        else:
-            return MultiModalCompleteComponent(multi_modal_llm=self, **kwargs)
-
-    def __init_subclass__(cls, **kwargs) -> None:
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         """
         The callback decorators installs events, so they must be applied before
         the span decorators, otherwise the spans wouldn't contain the events.
@@ -181,82 +180,3 @@ class MultiModalLLM(ChainableMixin, BaseComponent, DispatcherSpanMixin):
                 else:
                     setattr(cls, attr, llm_completion_callback()(method))
         super().__init_subclass__(**kwargs)
-
-
-class BaseMultiModalComponent(QueryComponent):
-    """Base LLM component."""
-
-    multi_modal_llm: MultiModalLLM = Field(..., description="LLM")
-    streaming: bool = Field(default=False, description="Streaming mode")
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def set_callback_manager(self, callback_manager: Any) -> None:
-        """Set callback manager."""
-        # TODO: make callbacks work with multi-modal
-
-
-class MultiModalCompleteComponent(BaseMultiModalComponent):
-    """Multi-modal completion component."""
-
-    def _validate_component_inputs(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate component inputs during run_component."""
-        if "prompt" not in input:
-            raise ValueError("Prompt must be in input dict.")
-
-        # do special check to see if prompt is a list of chat messages
-        if isinstance(input["prompt"], get_args(List[ChatMessage])):
-            raise NotImplementedError(
-                "Chat messages not yet supported as input to multi-modal model."
-            )
-        else:
-            input["prompt"] = validate_and_convert_stringable(input["prompt"])
-
-        # make sure image documents are valid
-        if "image_documents" in input:
-            if not isinstance(input["image_documents"], list):
-                raise ValueError("image_documents must be a list.")
-            for doc in input["image_documents"]:
-                if not isinstance(doc, ImageDocument):
-                    raise ValueError(
-                        "image_documents must be a list of ImageDocument objects."
-                    )
-
-        return input
-
-    def _run_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        # TODO: support only complete for now
-        prompt = kwargs["prompt"]
-        image_documents = kwargs.get("image_documents", [])
-        if self.streaming:
-            response = self.multi_modal_llm.stream_complete(prompt, image_documents)
-        else:
-            response = self.multi_modal_llm.complete(prompt, image_documents)
-        return {"output": response}
-
-    async def _arun_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        # TODO: support only complete for now
-        # non-trivial to figure how to support chat/complete/etc.
-        prompt = kwargs["prompt"]
-        image_documents = kwargs.get("image_documents", [])
-        if self.streaming:
-            response = await self.multi_modal_llm.astream_complete(
-                prompt, image_documents
-            )
-        else:
-            response = await self.multi_modal_llm.acomplete(prompt, image_documents)
-        return {"output": response}
-
-    @property
-    def input_keys(self) -> InputKeys:
-        """Input keys."""
-        # TODO: support only complete for now
-        return InputKeys.from_keys({"prompt", "image_documents"})
-
-    @property
-    def output_keys(self) -> OutputKeys:
-        """Output keys."""
-        return OutputKeys.from_keys({"output"})

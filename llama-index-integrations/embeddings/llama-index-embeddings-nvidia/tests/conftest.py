@@ -1,3 +1,6 @@
+# pants requires this import to recognize the dep
+import pytest_asyncio  # noqa: F401
+
 import pytest
 import os
 
@@ -22,7 +25,22 @@ def masked_env_var() -> Generator[str, None, None]:
             os.environ[var] = val
 
 
+@pytest.fixture(params=[Interface])
+def public_class(request: pytest.FixtureRequest) -> type:
+    return request.param
+
+
 def pytest_collection_modifyitems(config, items):
+    for item in items:
+        # pytest-httpx >= 0.35 asserts every registered mock is requested and
+        # makes mocks single-use; these tests register broad, reused mocks.
+        item.add_marker(
+            pytest.mark.httpx_mock(
+                assert_all_responses_were_requested=False,
+                assert_all_requests_were_expected=False,
+                can_send_already_matched_responses=True,
+            )
+        )
     if "NVIDIA_API_KEY" not in os.environ:
         skip_marker = pytest.mark.skip(
             reason="requires NVIDIA_API_KEY environment variable or --nim-endpoint option"
@@ -63,7 +81,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     mode = get_mode(metafunc.config)
 
     if "model" in metafunc.fixturenames:
-        models = [DEFAULT_MODEL]
+        # Default models to test - include both default and custom endpoint models
+        models = [DEFAULT_MODEL, "NV-Embed-QA"]
         if model := metafunc.config.getoption("--model-id"):
             models = [model]
         elif metafunc.config.getoption("--all-models"):

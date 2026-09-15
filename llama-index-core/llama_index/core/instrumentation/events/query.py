@@ -4,32 +4,36 @@ from llama_index.core.schema import QueryType
 
 
 class QueryStartEvent(BaseEvent):
-    """QueryStartEvent.
+    """
+    QueryStartEvent.
 
     Args:
         query (QueryType): Query as a string or query bundle.
+
     """
 
     query: QueryType
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "QueryStartEvent"
 
 
 class QueryEndEvent(BaseEvent):
-    """QueryEndEvent.
+    """
+    QueryEndEvent.
 
     Args:
         query (QueryType): Query as a string or query bundle.
         response (RESPONSE_TYPE): Response.
+
     """
 
     query: QueryType
     response: RESPONSE_TYPE
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "QueryEndEvent"

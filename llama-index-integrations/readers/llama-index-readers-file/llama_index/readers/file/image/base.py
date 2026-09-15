@@ -1,4 +1,5 @@
-"""Image parser.
+"""
+Image parser.
 
 Contains parsers for image files.
 
@@ -8,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, cast, Any
 from fsspec import AbstractFileSystem
+from io import BytesIO
 
 from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document, ImageDocument
@@ -15,7 +17,8 @@ from llama_index.core.utils import infer_torch_device
 
 
 class ImageReader(BaseReader):
-    """Image parser.
+    """
+    Image parser.
 
     Extract text from images using DONUT or pytesseract.
 
@@ -82,7 +85,7 @@ class ImageReader(BaseReader):
         # load document image
         if fs:
             with fs.open(path=file) as f:
-                image = Image.open(f.read())
+                image = Image.open(BytesIO(f.read()))
         else:
             image = Image.open(file)
 

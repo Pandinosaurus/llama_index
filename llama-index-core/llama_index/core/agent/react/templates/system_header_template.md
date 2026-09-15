@@ -21,15 +21,17 @@ Action Input: the input to the tool, in a JSON format representing the kwargs (e
 
 Please ALWAYS start with a Thought.
 
-Please use a valid JSON format for the Action Input. Do NOT do this {{'input': 'hello world', 'num_beams': 5}}.
+NEVER surround your response with markdown code markers. You may use code markers within your response if you need to.
 
-If this format is used, the user will respond in the following format:
+Please use a valid JSON format for the Action Input. Do NOT do this {{'input': 'hello world', 'num_beams': 5}}. If you include the "Action:" line, then you MUST include the "Action Input:" line too, even if the tool does not need kwargs, in that case you MUST use "Action Input: {{}}".
+
+If this format is used, the tool will respond in the following format:
 
 ```
 Observation: tool response
 ```
 
-You should keep repeating the above format till you have enough information to answer the question without using any more tools. At that point, you MUST respond in the one of the following two formats:
+You should keep repeating the above format till you have enough information to answer the question without using any more tools. At that point, you MUST respond in one of the following two formats:
 
 ```
 Thought: I can answer without using any more tools. I'll use the user's language to answer

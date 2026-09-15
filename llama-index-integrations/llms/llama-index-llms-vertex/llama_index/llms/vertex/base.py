@@ -1,3 +1,4 @@
+import deprecated
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -9,7 +10,6 @@ from typing import (
     Sequence,
     Union,
 )
-from google.protobuf.json_format import MessageToDict
 from llama_index.core.base.llms.types import (
     ChatMessage,
     ChatResponse,
@@ -42,20 +42,27 @@ from llama_index.llms.vertex.utils import (
     force_single_tool_call,
 )
 from vertexai.generative_models._generative_models import SafetySettingsType
+from vertexai.generative_models import ToolConfig
 
 if TYPE_CHECKING:
-    from llama_index.core.chat_engine.types import AgentChatResponse
     from llama_index.core.tools.types import BaseTool
 
 
+@deprecated.deprecated(
+    reason=(
+        "Should use `llama-index-llms-google-genai` instead, using Google's latest unified SDK. "
+        "See: https://docs.llamaindex.ai/en/stable/examples/llm/google_genai/"
+    )
+)
 class Vertex(FunctionCallingLLM):
-    """Vertext LLM.
+    """
+    Vertext LLM.
 
     Examples:
         `pip install llama-index-llms-vertex`
 
         ```python
-        from llama_index.llms.openai import Vertex
+        from llama_index.llms.vertex import Vertex
 
         # Set up necessary variables
         credentials = {
@@ -68,16 +75,21 @@ class Vertex(FunctionCallingLLM):
             model="text-bison",
             project=credentials["project_id"],
             credentials=credentials,
+            context_window=4096,
         )
 
         # Access the complete method from the instance
         response = llm.complete("Hello world!")
         print(str(response))
         ```
+
     """
 
     model: str = Field(description="The vertex model to use.")
     temperature: float = Field(description="The temperature to use for sampling.")
+    context_window: int = Field(
+        default=4096, description="The context window to use for sampling."
+    )
     max_tokens: int = Field(description="The maximum number of tokens to generate.")
     examples: Optional[Sequence[ChatMessage]] = Field(
         description="Example messages for the chat model."
@@ -93,6 +105,7 @@ class Vertex(FunctionCallingLLM):
     _is_chat_model: bool = PrivateAttr()
     _client: Any = PrivateAttr()
     _chat_client: Any = PrivateAttr()
+    _safety_settings: Dict[str, Any] = PrivateAttr()
 
     def __init__(
         self,
@@ -103,6 +116,7 @@ class Vertex(FunctionCallingLLM):
         examples: Optional[Sequence[ChatMessage]] = None,
         temperature: float = 0.1,
         max_tokens: int = 512,
+        context_window: int = 4096,
         max_retries: int = 10,
         iscode: bool = False,
         safety_settings: Optional[SafetySettingsType] = None,
@@ -120,6 +134,24 @@ class Vertex(FunctionCallingLLM):
         additional_kwargs = additional_kwargs or {}
         callback_manager = callback_manager or CallbackManager([])
 
+        super().__init__(
+            temperature=temperature,
+            context_window=context_window,
+            max_tokens=max_tokens,
+            additional_kwargs=additional_kwargs,
+            max_retries=max_retries,
+            model=model,
+            examples=examples,
+            iscode=iscode,
+            callback_manager=callback_manager,
+            system_prompt=system_prompt,
+            messages_to_prompt=messages_to_prompt,
+            completion_to_prompt=completion_to_prompt,
+            pydantic_program_mode=pydantic_program_mode,
+            output_parser=output_parser,
+        )
+
+        self._safety_settings = safety_settings
         self._is_gemini = False
         self._is_chat_model = False
         if model in CHAT_MODELS:
@@ -143,28 +175,12 @@ class Vertex(FunctionCallingLLM):
 
             self._client = TextGenerationModel.from_pretrained(model)
         elif is_gemini_model(model):
-            self._client = create_gemini_client(model, safety_settings)
+            self._client = create_gemini_client(model, self._safety_settings)
             self._chat_client = self._client
             self._is_gemini = True
             self._is_chat_model = True
         else:
             raise (ValueError(f"Model {model} not found, please verify the model name"))
-
-        super().__init__(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            additional_kwargs=additional_kwargs,
-            max_retries=max_retries,
-            model=model,
-            examples=examples,
-            iscode=iscode,
-            callback_manager=callback_manager,
-            system_prompt=system_prompt,
-            messages_to_prompt=messages_to_prompt,
-            completion_to_prompt=completion_to_prompt,
-            pydantic_program_mode=pydantic_program_mode,
-            output_parser=output_parser,
-        )
 
     @classmethod
     def class_name(cls) -> str:
@@ -173,6 +189,8 @@ class Vertex(FunctionCallingLLM):
     @property
     def metadata(self) -> LLMMetadata:
         return LLMMetadata(
+            num_output=self.max_tokens,
+            context_window=self.context_window,
             is_chat_model=self._is_chat_model,
             is_function_calling_model=self._is_gemini,
             model_name=self.model,
@@ -417,7 +435,7 @@ class Vertex(FunctionCallingLLM):
             is_gemini=self._is_gemini,
             **params,
         )
-        return CompletionResponse(text=completion.text)
+        return CompletionResponse(text=completion.text, raw=completion.__dict__)
 
     @llm_chat_callback()
     async def astream_chat(
@@ -431,16 +449,17 @@ class Vertex(FunctionCallingLLM):
     ) -> CompletionResponseAsyncGen:
         raise (ValueError("Not Implemented"))
 
-    def chat_with_tools(
+    def _prepare_chat_with_tools(
         self,
         tools: List["BaseTool"],
         user_msg: Optional[Union[str, ChatMessage]] = None,
         chat_history: Optional[List[ChatMessage]] = None,
         verbose: bool = False,
-        allow_parallel_tool_calls: bool = False,
+        allow_parallel_tool_calls: bool = False,  # theoretically supported, but not implemented
+        tool_required: bool = False,
         **kwargs: Any,
-    ) -> ChatResponse:
-        """Predict and call the tool."""
+    ) -> Dict[str, Any]:
+        """Prepare the arguments needed to let the LLM chat with tools."""
         chat_history = chat_history or []
 
         if isinstance(user_msg, str):
@@ -457,49 +476,45 @@ class Vertex(FunctionCallingLLM):
                 }
             )
 
-        response = self.chat(chat_history, tools=tool_dicts or None, **kwargs)
+        tool_config = (
+            {"tool_config": self._to_function_calling_config(tool_required)}
+            if self._is_gemini
+            else {}
+        )
 
-        if not allow_parallel_tool_calls:
-            force_single_tool_call(response)
+        print("tool_config", tool_config)
+        return {
+            "messages": chat_history,
+            "tools": tool_dicts or None,
+            **tool_config,
+            **kwargs,
+        }
 
-        return response
+    def _to_function_calling_config(self, tool_required: bool) -> ToolConfig:
+        return ToolConfig(
+            function_calling_config=ToolConfig.FunctionCallingConfig(
+                mode=ToolConfig.FunctionCallingConfig.Mode.ANY
+                if tool_required
+                else ToolConfig.FunctionCallingConfig.Mode.AUTO,
+                allowed_function_names=None,
+            )
+        )
 
-    async def achat_with_tools(
+    def _validate_chat_with_tools_response(
         self,
+        response: ChatResponse,
         tools: List["BaseTool"],
-        user_msg: Optional[Union[str, ChatMessage]] = None,
-        chat_history: Optional[List[ChatMessage]] = None,
-        verbose: bool = False,
         allow_parallel_tool_calls: bool = False,
         **kwargs: Any,
     ) -> ChatResponse:
-        """Predict and call the tool."""
-        chat_history = chat_history or []
-
-        if isinstance(user_msg, str):
-            user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
-            chat_history.append(user_msg)
-
-        tool_dicts = []
-        for tool in tools:
-            tool_dicts.append(
-                {
-                    "name": tool.metadata.name,
-                    "description": tool.metadata.description,
-                    "parameters": tool.metadata.get_parameters_dict(),
-                }
-            )
-
-        response = await self.achat(chat_history, tools=tool_dicts or None, **kwargs)
-
+        """Validate the response from chat_with_tools."""
         if not allow_parallel_tool_calls:
             force_single_tool_call(response)
-
         return response
 
     def get_tool_calls_from_response(
         self,
-        response: "AgentChatResponse",
+        response: "ChatResponse",
         error_on_no_tool_call: bool = True,
         **kwargs: Any,
     ) -> List[ToolSelection]:
@@ -516,7 +531,7 @@ class Vertex(FunctionCallingLLM):
 
         tool_selections = []
         for tool_call in tool_calls:
-            response_dict = MessageToDict(tool_call._pb)
+            response_dict = tool_call.to_dict()
             if "args" not in response_dict or "name" not in response_dict:
                 raise ValueError("Invalid tool call.")
             argument_dict = response_dict["args"]

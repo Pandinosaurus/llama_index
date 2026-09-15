@@ -15,12 +15,13 @@ DEFAULT_DESCRIPTION = """Useful for running a natural language query
 against a knowledge base and get back a natural language response.
 """
 FAILED_TOOL_OUTPUT_TEMPLATE = (
-    "Could not use tool {tool_name} because it failed evaluation.\n" "Reason: {reason}"
+    "Could not use tool {tool_name} because it failed evaluation.\nReason: {reason}"
 )
 
 
 class EvalQueryEngineTool(QueryEngineTool):
-    """Evaluating query engine tool.
+    """
+    Evaluating query engine tool.
 
     A tool that makes use of a query engine and an evaluator, where the
     evaluation of the query engine response will determine the tool output.
@@ -29,6 +30,7 @@ class EvalQueryEngineTool(QueryEngineTool):
         evaluator (BaseEvaluator): A query engine.
         query_engine (BaseQueryEngine): A query engine.
         metadata (ToolMetadata): The associated metadata of the query engine.
+
     """
 
     _evaluator: BaseEvaluator
@@ -37,9 +39,9 @@ class EvalQueryEngineTool(QueryEngineTool):
     def __init__(
         self,
         evaluator: BaseEvaluator,
-        *args,
+        *args: Any,
         failed_tool_output_template: str = FAILED_TOOL_OUTPUT_TEMPLATE,
-        **kwargs
+        **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self._evaluator = evaluator
@@ -63,10 +65,11 @@ class EvalQueryEngineTool(QueryEngineTool):
     def from_defaults(
         cls,
         query_engine: BaseQueryEngine,
-        evaluator: Optional[BaseEvaluator] = None,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        return_direct: bool = False,
         resolve_input_errors: bool = True,
+        evaluator: Optional[BaseEvaluator] = None,
     ) -> "EvalQueryEngineTool":
         return cls(
             evaluator=evaluator or AnswerRelevancyEvaluator(),
@@ -74,6 +77,7 @@ class EvalQueryEngineTool(QueryEngineTool):
             metadata=ToolMetadata(
                 name=name or DEFAULT_NAME,
                 description=description or DEFAULT_DESCRIPTION,
+                return_direct=return_direct,
             ),
             resolve_input_errors=resolve_input_errors,
         )

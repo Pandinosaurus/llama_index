@@ -1,13 +1,5 @@
 import json
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Optional,
-    Sequence,
-    List,
-    Union,
-)
+from typing import Any, Callable, Dict, Optional, Sequence, List, Union, TYPE_CHECKING
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.constants import DEFAULT_TEMPERATURE
 
@@ -51,9 +43,13 @@ from llama_index.llms.deepinfra.client import DeepInfraClient
 from llama_index.llms.deepinfra.types import ToolCallMessage
 from llama_index.core.llms.function_calling import FunctionCallingLLM, ToolSelection
 
+if TYPE_CHECKING:
+    from llama_index.core.tools.types import BaseTool
+
 
 class DeepInfraLLM(FunctionCallingLLM):
-    """DeepInfra LLM.
+    """
+    DeepInfra LLM.
 
     Examples:
         `pip install llama-index-llms-deepinfra`
@@ -72,6 +68,7 @@ class DeepInfraLLM(FunctionCallingLLM):
         response = llm.complete("Hello World!")
         print(response)
         ```
+
     """
 
     model: str = Field(
@@ -81,8 +78,8 @@ class DeepInfraLLM(FunctionCallingLLM):
     temperature: float = Field(
         default=DEFAULT_TEMPERATURE,
         description="The temperature to use during generation.",
-        gte=0.0,
-        lte=1.0,
+        ge=0.0,
+        le=1.0,
     )
     max_tokens: Optional[int] = Field(
         default=DEFAULT_MAX_TOKENS,
@@ -91,10 +88,10 @@ class DeepInfraLLM(FunctionCallingLLM):
     )
 
     timeout: Optional[float] = Field(
-        default=None, description="The timeout to use in seconds.", gte=0
+        default=None, description="The timeout to use in seconds.", ge=0
     )
     max_retries: int = Field(
-        default=10, description="The maximum number of API retries.", gte=0
+        default=10, description="The maximum number of API retries.", ge=0
     )
 
     _api_key: Optional[str] = PrivateAttr()
@@ -124,13 +121,7 @@ class DeepInfraLLM(FunctionCallingLLM):
     ) -> None:
         additional_kwargs = additional_kwargs or {}
         callback_manager = callback_manager or CallbackManager([])
-        self._api_key = get_from_param_or_env("api_key", api_key, ENV_VARIABLE)
-        self._client = DeepInfraClient(
-            api_key=self._api_key,
-            api_base=api_base,
-            timeout=timeout,
-            max_retries=max_retries,
-        )
+
         super().__init__(
             model=model,
             api_base=api_base,
@@ -146,6 +137,13 @@ class DeepInfraLLM(FunctionCallingLLM):
             completion_to_prompt=completion_to_prompt,
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
+        )
+        self._api_key = get_from_param_or_env("api_key", api_key, ENV_VARIABLE)
+        self._client = DeepInfraClient(
+            api_key=self._api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     @classmethod
@@ -180,6 +178,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Returns:
             str: The generated text completion.
+
         """
         payload = self._build_payload(prompt=prompt, **kwargs)
         result = self._client.request(INFERENCE_ENDPOINT, payload)
@@ -196,6 +195,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Yields:
             CompletionResponseGen: The streaming text completion.
+
         """
         payload = self._build_payload(prompt=prompt, **kwargs)
 
@@ -218,6 +218,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Returns:
             ChatResponse: The chat response containing a sequence of messages.
+
         """
         messages = chat_messages_to_list(messages)
         payload = self._build_payload(messages=messages, **kwargs)
@@ -248,6 +249,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Yields:
             ChatResponseGen: The chat response containing a sequence of messages.
+
         """
         messages = chat_messages_to_list(chat_messages)
         payload = self._build_payload(messages=messages, **kwargs)
@@ -282,6 +284,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Returns:
             CompletionResponse: The generated text completion.
+
         """
         payload = self._build_payload(prompt=prompt, **kwargs)
 
@@ -301,6 +304,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Yields:
             CompletionResponseAsyncGen: The streaming text completion.
+
         """
         payload = self._build_payload(prompt=prompt, **kwargs)
 
@@ -330,6 +334,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Returns:
             ChatResponse: The chat response containing a sequence of messages.
+
         """
         messages = chat_messages_to_list(chat_messages)
         payload = self._build_payload(messages=messages, **kwargs)
@@ -359,6 +364,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Yields:
             ChatResponseAsyncGen: The chat response containing a sequence of messages.
+
         """
         messages = chat_messages_to_list(chat_messages)
         payload = self._build_payload(messages=messages, **kwargs)
@@ -386,16 +392,17 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         return gen()
 
-    def chat_with_tools(
+    def _prepare_chat_with_tools(
         self,
         tools: List["BaseTool"],
         user_msg: Optional[Union[str, ChatMessage]] = None,
         chat_history: Optional[List[ChatMessage]] = None,
         verbose: bool = False,
         allow_parallel_tool_calls: bool = False,
+        tool_required: bool = False,  # unsupported by deepinfra https://deepinfra.com/docs/advanced/function_calling - tool_choice only takes "auto" or "none", (not "required", so sadly can't require it)
         tool_choice: Union[str, dict] = "auto",
         **kwargs: Any,
-    ) -> ChatResponse:
+    ) -> Dict[str, Any]:
         tool_specs = [tool.metadata.to_openai_tool() for tool in tools]
         if isinstance(user_msg, str):
             user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
@@ -404,50 +411,27 @@ class DeepInfraLLM(FunctionCallingLLM):
         if user_msg:
             messages.append(user_msg)
 
-        response = self.chat(
-            messages,
-            tools=tool_specs or None,
-            tool_choice=TOOL_CHOICE,
+        return {
+            "messages": messages,
+            "tools": tool_specs or None,
+            "tool_choice": TOOL_CHOICE,
             **kwargs,
-        )
+        }
 
-        if not allow_parallel_tool_calls:
-            force_single_tool_call(response)
-        return response
-
-    async def achat_with_tools(
+    def _validate_chat_with_tools_response(
         self,
+        response: "ChatResponse",
         tools: List["BaseTool"],
-        user_msg: Optional[Union[str, ChatMessage]] = None,
-        chat_history: Optional[List[ChatMessage]] = None,
-        verbose: bool = False,
         allow_parallel_tool_calls: bool = False,
-        tool_choice: Union[str, dict] = "auto",
         **kwargs: Any,
     ) -> ChatResponse:
-        tool_specs = [tool.metadata.to_openai_tool() for tool in tools]
-
-        if isinstance(user_msg, str):
-            user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
-
-        messages = chat_history or []
-        if user_msg:
-            messages.append(user_msg)
-
-        response = await self.achat(
-            messages,
-            tools=tool_specs or None,
-            tool_choice=TOOL_CHOICE,
-            **kwargs,
-        )
-
         if not allow_parallel_tool_calls:
             force_single_tool_call(response)
         return response
 
     def get_tool_calls_from_response(
         self,
-        response: "AgentChatResponse",
+        response: "ChatResponse",
         error_on_no_tool_call: bool = True,
         **kwargs: Any,
     ) -> List[ToolSelection]:
@@ -496,6 +480,7 @@ class DeepInfraLLM(FunctionCallingLLM):
 
         Returns:
             Dict[str, Any]: The API request payload.
+
         """
         return {
             **self.generate_kwargs,

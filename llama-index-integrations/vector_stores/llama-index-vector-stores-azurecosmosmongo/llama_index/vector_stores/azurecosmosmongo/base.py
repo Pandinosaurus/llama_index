@@ -1,4 +1,5 @@
-"""Azure CosmosDB MongoDB vCore Vector store index.
+"""
+Azure CosmosDB MongoDB vCore Vector store index.
 
 An index that is built on top of an existing vector store.
 
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
-    """Azure CosmosDB MongoDB vCore Vector Store.
+    """
+    Azure CosmosDB MongoDB vCore Vector Store.
 
     To use, you should have both:
     - the ``pymongo`` python package installed
@@ -50,6 +52,7 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
             collection_name="paul_graham_essay",
         )
         ```
+
     """
 
     stores_text: bool = True
@@ -81,7 +84,8 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
         insert_kwargs: Optional[Dict] = None,
         **kwargs: Any,
     ) -> None:
-        """Initialize the vector store.
+        """
+        Initialize the vector store.
 
         Args:
             mongodb_client: An Azure CosmoDB MongoDB client (type: MongoClient, shown any for lazy import).
@@ -97,6 +101,7 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
             cosmos_search_kwargs: An Azure CosmosDB MongoDB field that will
             contain search options, such as kind, numLists, similarity, and dimensions.
             insert_kwargs: The kwargs used during `insert`.
+
         """
         super().__init__()
 
@@ -109,7 +114,8 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
                     "if not directly passing in client."
                 )
             self._mongodb_client = pymongo.MongoClient(
-                os.environ["AZURE_COSMOSDB_MONGODB_URI"]
+                os.environ["AZURE_COSMOSDB_MONGODB_URI"],
+                appname="LLAMAINDEX_PYTHON",
             )
 
         self._collection = self._mongodb_client[db_name][collection_name]
@@ -126,36 +132,118 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
 
     def _create_vector_search_index(self) -> None:
         db = self._mongodb_client[self._db_name]
-        db.command(
-            {
-                "createIndexes": self._collection_name,
-                "indexes": [
-                    {
-                        "name": self._index_name,
-                        "key": {self._embedding_key: "cosmosSearch"},
-                        "cosmosSearchOptions": {
-                            "kind": self._cosmos_search_kwargs.get(
-                                "kind", "vector-ivf"
-                            ),
-                            "numLists": self._cosmos_search_kwargs.get("numLists", 1),
-                            "similarity": self._cosmos_search_kwargs.get(
-                                "similarity", "COS"
-                            ),
-                            "dimensions": self._cosmos_search_kwargs.get(
-                                "dimensions", 1536
-                            ),
-                        },
-                    }
-                ],
-            }
-        )
+
+        create_index_commands = {}
+        kind = self._cosmos_search_kwargs.get("kind", "vector-hnsw")
+
+        if kind == "vector-ivf":
+            create_index_commands = self._get_vector_index_ivf(kind)
+        elif kind == "vector-hnsw":
+            create_index_commands = self._get_vector_index_hnsw(kind)
+        elif kind == "vector-diskann":
+            create_index_commands = self._get_vector_index_diskann(kind)
+        db.command(create_index_commands)
+
+    def _get_vector_index_ivf(
+        self,
+        kind: str,
+    ) -> Dict[str, Any]:
+        indexes = {
+            "name": self._index_name,
+            "key": {self._embedding_key: "cosmosSearch"},
+            "cosmosSearchOptions": {
+                "kind": kind,
+                "numLists": self._cosmos_search_kwargs.get("numLists", 1),
+                "similarity": self._cosmos_search_kwargs.get("similarity", "COS"),
+                "dimensions": self._cosmos_search_kwargs.get("dimensions", 1536),
+            },
+        }
+        if self._cosmos_search_kwargs.get("compression", None) == "half":
+            indexes["cosmosSearchOptions"]["compression"] = "half"
+        return {
+            "createIndexes": self._collection_name,
+            "indexes": [indexes],
+        }
+
+    def _get_vector_index_hnsw(
+        self,
+        kind: str,
+    ) -> Dict[str, Any]:
+        indexes = {
+            "name": self._index_name,
+            "key": {self._embedding_key: "cosmosSearch"},
+            "cosmosSearchOptions": {
+                "kind": kind,
+                "m": self._cosmos_search_kwargs.get("m", 2),
+                "efConstruction": self._cosmos_search_kwargs.get("efConstruction", 64),
+                "similarity": self._cosmos_search_kwargs.get("similarity", "COS"),
+                "dimensions": self._cosmos_search_kwargs.get("dimensions", 1536),
+            },
+        }
+        if self._cosmos_search_kwargs.get("compression", None) == "half":
+            indexes["cosmosSearchOptions"]["compression"] = "half"
+        return {
+            "createIndexes": self._collection_name,
+            "indexes": [indexes],
+        }
+
+    def _get_vector_index_diskann(
+        self,
+        kind: str,
+    ) -> Dict[str, Any]:
+        indexes = {
+            "name": self._index_name,
+            "key": {self._embedding_key: "cosmosSearch"},
+            "cosmosSearchOptions": {
+                "kind": kind,
+                "maxDegree": self._cosmos_search_kwargs.get("maxDegree", 32),
+                "lBuild": self._cosmos_search_kwargs.get("lBuild", 50),
+                "similarity": self._cosmos_search_kwargs.get("similarity", "COS"),
+                "dimensions": self._cosmos_search_kwargs.get("dimensions", 1536),
+            },
+        }
+        if self._cosmos_search_kwargs.get("compression", None) == "pq":
+            indexes["cosmosSearchOptions"]["compression"] = "pq"
+            indexes["cosmosSearchOptions"]["pqCompressedDims"] = (
+                self._cosmos_search_kwargs.get(
+                    "pqCompressedDims",
+                    self._cosmos_search_kwargs.get("dimensions", 1536),
+                ),
+            )
+            indexes["cosmosSearchOptions"]["pqSampleSize"] = (
+                self._cosmos_search_kwargs.get("pqSampleSize", 1000),
+            )
+        return {
+            "createIndexes": self._collection_name,
+            "indexes": [indexes],
+        }
+
+    def create_filter_index(
+        self,
+        property_to_filter: str,
+        index_name: str,
+    ) -> dict[str, Any]:
+        db = self._mongodb_client[self._db_name]
+        command = {
+            "createIndexes": self._collection.name,
+            "indexes": [
+                {
+                    "key": {property_to_filter: 1},
+                    "name": index_name,
+                }
+            ],
+        }
+
+        create_index_responses: dict[str, Any] = db.command(command)
+        return create_index_responses
 
     def add(
         self,
         nodes: List[BaseNode],
         **add_kwargs: Any,
     ) -> List[str]:
-        """Add nodes to index.
+        """
+        Add nodes to index.
 
         Args:
             nodes: List[BaseNode]: list of nodes with embeddings
@@ -204,29 +292,27 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
         """Return MongoDB client."""
         return self._mongodb_client
 
-    def _query(self, query: VectorStoreQuery) -> VectorStoreQueryResult:
-        params: Dict[str, Any] = {
-            "vector": query.query_embedding,
-            "path": self._embedding_key,
-            "k": query.similarity_top_k,
-        }
-
-        if query.filters is not None:
-            raise ValueError(
-                "Metadata filters not implemented for azure cosmosdb mongodb yet."
+    def _query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
+        pipeline: List[dict[str, Any]] = []
+        kind = self._cosmos_search_kwargs.get("kind", "vector-hnsw")
+        if kind == "vector-ivf":
+            pipeline = self._get_pipeline_vector_ivf(
+                query, kwargs.get("oversampling", 1.0), kwargs.get("pre_filter", {})
             )
-
-        query_field = {"$search": {"cosmosSearch": params, "returnStoredSource": True}}
-
-        pipeline = [
-            query_field,
-            {
-                "$project": {
-                    "similarityScore": {"$meta": "searchScore"},
-                    "document": "$$ROOT",
-                }
-            },
-        ]
+        elif kind == "vector-hnsw":
+            pipeline = self._get_pipeline_vector_hnsw(
+                query,
+                kwargs.get("ef_search", 40),
+                kwargs.get("oversampling", 1.0),
+                kwargs.get("pre_filter", {}),
+            )
+        elif kind == "vector-diskann":
+            pipeline = self._get_pipeline_vector_diskann(
+                query,
+                kwargs.get("lSearch", 40),
+                kwargs.get("oversampling", 1.0),
+                kwargs.get("pre_filter", {}),
+            )
 
         logger.debug("Running query pipeline: %s", pipeline)
         cursor = self._collection.aggregate(pipeline)  # type: ignore
@@ -266,13 +352,107 @@ class AzureCosmosDBMongoDBVectorSearch(BasePydanticVectorStore):
         logger.debug("Result of query: %s", result)
         return result
 
+    def _get_pipeline_vector_ivf(
+        self, query: VectorStoreQuery, oversampling: float, pre_filter: Optional[Dict]
+    ) -> List[dict[str, Any]]:
+        params = {
+            "vector": query.query_embedding,
+            "path": self._embedding_key,
+            "k": query.similarity_top_k,
+            "oversampling": oversampling,
+        }
+        if pre_filter:
+            params["filter"] = pre_filter
+
+        pipeline: List[dict[str, Any]] = [
+            {
+                "$search": {
+                    "cosmosSearch": params,
+                    "returnStoredSource": True,
+                }
+            },
+            {
+                "$project": {
+                    "similarityScore": {"$meta": "searchScore"},
+                    "document": "$$ROOT",
+                }
+            },
+        ]
+        return pipeline
+
+    def _get_pipeline_vector_hnsw(
+        self,
+        query: VectorStoreQuery,
+        ef_search: int,
+        oversampling: float,
+        pre_filter: Optional[Dict],
+    ) -> List[dict[str, Any]]:
+        params = {
+            "vector": query.query_embedding,
+            "path": self._embedding_key,
+            "k": query.similarity_top_k,
+            "efSearch": ef_search,
+            "oversampling": oversampling,
+        }
+        if pre_filter:
+            params["filter"] = pre_filter
+
+        pipeline: List[dict[str, Any]] = [
+            {
+                "$search": {
+                    "cosmosSearch": params,
+                }
+            },
+            {
+                "$project": {
+                    "similarityScore": {"$meta": "searchScore"},
+                    "document": "$$ROOT",
+                }
+            },
+        ]
+        return pipeline
+
+    def _get_pipeline_vector_diskann(
+        self,
+        query: VectorStoreQuery,
+        l_search: int,
+        oversampling: float,
+        pre_filter: Optional[Dict],
+    ) -> List[dict[str, Any]]:
+        params = {
+            "vector": query.query_embedding,
+            "path": self._embedding_key,
+            "k": query.similarity_top_k,
+            "lSearch": l_search,
+            "oversampling": oversampling,
+        }
+        if pre_filter:
+            params["filter"] = pre_filter
+
+        pipeline: List[dict[str, Any]] = [
+            {
+                "$search": {
+                    "cosmosSearch": params,
+                }
+            },
+            {
+                "$project": {
+                    "similarityScore": {"$meta": "searchScore"},
+                    "document": "$$ROOT",
+                }
+            },
+        ]
+        return pipeline
+
     def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
-        """Query index for top k most similar nodes.
+        """
+        Query index for top k most similar nodes.
 
         Args:
             query: a VectorStoreQuery object.
 
         Returns:
             A VectorStoreQueryResult containing the results of the query.
+
         """
-        return self._query(query)
+        return self._query(query, **kwargs)

@@ -5,7 +5,8 @@ from llama_index.storage.kvstore.elasticsearch import ElasticsearchKVStore
 
 
 class ElasticsearchIndexStore(KVIndexStore):
-    """Elasticsearch Index store.
+    """
+    Elasticsearch Index store.
 
     Args:
         elasticsearch_kvstore (ElasticsearchKVStore): Elasticsearch key-value store
@@ -18,9 +19,14 @@ class ElasticsearchIndexStore(KVIndexStore):
         elasticsearch_kvstore: ElasticsearchKVStore,
         collection_index: Optional[str] = None,
         namespace: Optional[str] = None,
+        collection_suffix: Optional[str] = None,
     ) -> None:
         """Init a ElasticsearchIndexStore."""
-        super().__init__(elasticsearch_kvstore, namespace=namespace)
+        super().__init__(
+            elasticsearch_kvstore,
+            namespace=namespace,
+            collection_suffix=collection_suffix,
+        )
         if collection_index:
             self._collection = collection_index
         else:

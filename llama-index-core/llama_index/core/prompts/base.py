@@ -13,8 +13,14 @@ from typing import (
     Tuple,
     Union,
 )
+from typing_extensions import Annotated
 
-from llama_index.core.bridge.pydantic import Field
+from llama_index.core.bridge.pydantic import (
+    Field,
+    WithJsonSchema,
+    PlainSerializer,
+    SerializeAsAny,
+)
 
 if TYPE_CHECKING:
     from llama_index.core.bridge.langchain import (
@@ -26,14 +32,7 @@ if TYPE_CHECKING:
         ConditionalPromptSelector as LangchainSelector,
     )
 from llama_index.core.base.llms.types import ChatMessage
-from llama_index.core.base.query_pipeline.query import (
-    ChainableMixin,
-    InputKeys,
-    OutputKeys,
-    QueryComponent,
-    validate_and_convert_stringable,
-)
-from llama_index.core.bridge.pydantic import BaseModel
+from llama_index.core.bridge.pydantic import BaseModel, ConfigDict
 from llama_index.core.base.llms.base import BaseLLM
 from llama_index.core.base.llms.generic_utils import (
     messages_to_prompt as default_messages_to_prompt,
@@ -42,20 +41,30 @@ from llama_index.core.base.llms.generic_utils import (
     prompt_to_messages,
 )
 from llama_index.core.prompts.prompt_type import PromptType
-from llama_index.core.prompts.utils import get_template_vars
+from llama_index.core.prompts.utils import get_template_vars, format_string
 from llama_index.core.types import BaseOutputParser
 
 
-class BasePromptTemplate(ChainableMixin, BaseModel, ABC):
+AnnotatedCallable = Annotated[
+    Callable,
+    WithJsonSchema({"type": "string"}),
+    WithJsonSchema({"type": "string"}),
+    PlainSerializer(lambda x: f"{x.__module__}.{x.__name__}", return_type=str),
+]
+
+
+class BasePromptTemplate(BaseModel, ABC):  # type: ignore[no-redef]
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     metadata: Dict[str, Any]
     template_vars: List[str]
     kwargs: Dict[str, str]
     output_parser: Optional[BaseOutputParser]
     template_var_mappings: Optional[Dict[str, Any]] = Field(
-        default_factory=dict, description="Template variable mappings (Optional)."
+        default_factory=dict,  # type: ignore
+        description="Template variable mappings (Optional).",
     )
-    function_mappings: Optional[Dict[str, Callable]] = Field(
-        default_factory=dict,
+    function_mappings: Optional[Dict[str, AnnotatedCallable]] = Field(
+        default_factory=dict,  # type: ignore
         description=(
             "Function mappings (Optional). This is a mapping from template "
             "variable names to functions that take in the current kwargs and "
@@ -69,7 +78,8 @@ class BasePromptTemplate(ChainableMixin, BaseModel, ABC):
         return {template_var_mappings.get(k, k): v for k, v in kwargs.items()}
 
     def _map_function_vars(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """For keys in function_mappings, compute values and combine w/ kwargs.
+        """
+        For keys in function_mappings, compute values and combine w/ kwargs.
 
         Users can pass in functions instead of fixed values as format variables.
         For each function, we call the function with the current kwargs,
@@ -95,7 +105,8 @@ class BasePromptTemplate(ChainableMixin, BaseModel, ABC):
         return new_kwargs
 
     def _map_all_vars(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """Map both template and function variables.
+        """
+        Map both template and function variables.
 
         We (1) first call function mappings to compute functions,
         and then (2) call the template_var_mappings.
@@ -106,35 +117,22 @@ class BasePromptTemplate(ChainableMixin, BaseModel, ABC):
         # map template vars (to point to existing format vars in string template)
         return self._map_template_vars(new_kwargs)
 
-    class Config:
-        arbitrary_types_allowed = True
+    @abstractmethod
+    def partial_format(self, **kwargs: Any) -> "BasePromptTemplate": ...
 
     @abstractmethod
-    def partial_format(self, **kwargs: Any) -> "BasePromptTemplate":
-        ...
-
-    @abstractmethod
-    def format(self, llm: Optional[BaseLLM] = None, **kwargs: Any) -> str:
-        ...
+    def format(self, llm: Optional[BaseLLM] = None, **kwargs: Any) -> str: ...
 
     @abstractmethod
     def format_messages(
         self, llm: Optional[BaseLLM] = None, **kwargs: Any
-    ) -> List[ChatMessage]:
-        ...
+    ) -> List[ChatMessage]: ...
 
     @abstractmethod
-    def get_template(self, llm: Optional[BaseLLM] = None) -> str:
-        ...
-
-    def _as_query_component(
-        self, llm: Optional[BaseLLM] = None, **kwargs: Any
-    ) -> QueryComponent:
-        """As query component."""
-        return PromptComponent(prompt=self, format_messages=False, llm=llm)
+    def get_template(self, llm: Optional[BaseLLM] = None) -> str: ...
 
 
-class PromptTemplate(BasePromptTemplate):
+class PromptTemplate(BasePromptTemplate):  # type: ignore[no-redef]
     template: str
 
     def __init__(
@@ -193,7 +191,7 @@ class PromptTemplate(BasePromptTemplate):
         }
 
         mapped_all_kwargs = self._map_all_vars(all_kwargs)
-        prompt = self.template.format(**mapped_all_kwargs)
+        prompt = format_string(self.template, **mapped_all_kwargs)
 
         if self.output_parser is not None:
             prompt = self.output_parser.format(prompt)
@@ -215,12 +213,12 @@ class PromptTemplate(BasePromptTemplate):
         return self.template
 
 
-class ChatPromptTemplate(BasePromptTemplate):
+class ChatPromptTemplate(BasePromptTemplate):  # type: ignore[no-redef]
     message_templates: List[ChatMessage]
 
     def __init__(
         self,
-        message_templates: List[ChatMessage],
+        message_templates: Sequence[ChatMessage],
         prompt_type: str = PromptType.CUSTOM,
         output_parser: Optional[BaseOutputParser] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -234,7 +232,7 @@ class ChatPromptTemplate(BasePromptTemplate):
 
         template_vars = []
         for message_template in message_templates:
-            template_vars.extend(get_template_vars(message_template.content or ""))
+            template_vars.extend(message_template.get_template_vars())
 
         super().__init__(
             message_templates=message_templates,
@@ -255,10 +253,10 @@ class ChatPromptTemplate(BasePromptTemplate):
         """From messages."""
         if isinstance(message_templates[0], tuple):
             message_templates = [
-                ChatMessage.from_str(role=role, content=content)
+                ChatMessage.from_str(role=role, content=content)  # type: ignore[arg-type]
                 for role, content in message_templates
             ]
-        return cls(message_templates=message_templates, **kwargs)
+        return cls(message_templates=message_templates, **kwargs)  # type: ignore[arg-type]
 
     def partial_format(self, **kwargs: Any) -> "ChatPromptTemplate":
         prompt = deepcopy(self)
@@ -292,18 +290,7 @@ class ChatPromptTemplate(BasePromptTemplate):
 
         messages: List[ChatMessage] = []
         for message_template in self.message_templates:
-            template_vars = get_template_vars(message_template.content or "")
-            relevant_kwargs = {
-                k: v for k, v in mapped_all_kwargs.items() if k in template_vars
-            }
-            content_template = message_template.content or ""
-
-            # if there's mappings specified, make sure those are used
-            content = content_template.format(**relevant_kwargs)
-
-            message: ChatMessage = message_template.copy()
-            message.content = content
-            messages.append(message)
+            messages.append(message_template.format_vars(**mapped_all_kwargs))
 
         if self.output_parser is not None:
             messages = self.output_parser.format_messages(messages)
@@ -313,24 +300,18 @@ class ChatPromptTemplate(BasePromptTemplate):
     def get_template(self, llm: Optional[BaseLLM] = None) -> str:
         return default_messages_to_prompt(self.message_templates)
 
-    def _as_query_component(
-        self, llm: Optional[BaseLLM] = None, **kwargs: Any
-    ) -> QueryComponent:
-        """As query component."""
-        return PromptComponent(prompt=self, format_messages=True, llm=llm)
 
-
-class SelectorPromptTemplate(BasePromptTemplate):
-    default_template: BasePromptTemplate
+class SelectorPromptTemplate(BasePromptTemplate):  # type: ignore[no-redef]
+    default_template: SerializeAsAny[BasePromptTemplate]
     conditionals: Optional[
-        List[Tuple[Callable[[BaseLLM], bool], BasePromptTemplate]]
+        Sequence[Tuple[Callable[[BaseLLM], bool], BasePromptTemplate]]
     ] = None
 
     def __init__(
         self,
         default_template: BasePromptTemplate,
         conditionals: Optional[
-            List[Tuple[Callable[[BaseLLM], bool], BasePromptTemplate]]
+            Sequence[Tuple[Callable[[BaseLLM], bool], BasePromptTemplate]]
         ] = None,
     ):
         metadata = default_template.metadata
@@ -392,7 +373,7 @@ class SelectorPromptTemplate(BasePromptTemplate):
         return prompt.get_template(llm=llm)
 
 
-class LangchainPromptTemplate(BasePromptTemplate):
+class LangchainPromptTemplate(BasePromptTemplate):  # type: ignore[no-redef]
     selector: Any
     requires_langchain_llm: bool = False
 
@@ -536,56 +517,3 @@ class LangchainPromptTemplate(BasePromptTemplate):
 
 # NOTE: only for backwards compatibility
 Prompt = PromptTemplate
-
-
-class PromptComponent(QueryComponent):
-    """Prompt component."""
-
-    prompt: BasePromptTemplate = Field(..., description="Prompt")
-    llm: Optional[BaseLLM] = Field(
-        default=None, description="LLM to use for formatting prompt."
-    )
-    format_messages: bool = Field(
-        default=False,
-        description="Whether to format the prompt into a list of chat messages.",
-    )
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def set_callback_manager(self, callback_manager: Any) -> None:
-        """Set callback manager."""
-
-    def _validate_component_inputs(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate component inputs during run_component."""
-        keys = list(input.keys())
-        for k in keys:
-            input[k] = validate_and_convert_stringable(input[k])
-        return input
-
-    def _run_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        if self.format_messages:
-            output: Union[str, List[ChatMessage]] = self.prompt.format_messages(
-                llm=self.llm, **kwargs
-            )
-        else:
-            output = self.prompt.format(llm=self.llm, **kwargs)
-        return {"prompt": output}
-
-    async def _arun_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        # NOTE: no native async for prompt
-        return self._run_component(**kwargs)
-
-    @property
-    def input_keys(self) -> InputKeys:
-        """Input keys."""
-        return InputKeys.from_keys(
-            set(self.prompt.template_vars) - set(self.prompt.kwargs)
-        )
-
-    @property
-    def output_keys(self) -> OutputKeys:
-        """Output keys."""
-        return OutputKeys.from_keys({"prompt"})

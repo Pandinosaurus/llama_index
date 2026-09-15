@@ -16,7 +16,7 @@ from llama_index.core.graph_stores.simple import (
 )
 from llama_index.core.graph_stores.simple import SimpleGraphStore
 from llama_index.core.graph_stores.simple_labelled import SimplePropertyGraphStore
-from llama_index.core.graph_stores.types import DEFUALT_PG_PERSIST_FNAME as PG_FNAME
+from llama_index.core.graph_stores.types import DEFAULT_PG_PERSIST_FNAME as PG_FNAME
 from llama_index.core.graph_stores.types import GraphStore, PropertyGraphStore
 from llama_index.core.storage.docstore.simple_docstore import SimpleDocumentStore
 from llama_index.core.storage.docstore.types import (
@@ -42,6 +42,7 @@ from llama_index.core.vector_stores.simple import (
 from llama_index.core.vector_stores.types import (
     BasePydanticVectorStore,
 )
+from llama_index.core.bridge.pydantic import SerializeAsAny
 
 DEFAULT_PERSIST_DIR = "./storage"
 IMAGE_STORE_FNAME = "image_store.json"
@@ -50,7 +51,8 @@ IMAGE_VECTOR_STORE_NAMESPACE = "image"
 
 @dataclass
 class StorageContext:
-    """Storage context.
+    """
+    Storage context.
 
     The storage context container is a utility container for storing nodes,
     indices, and vectors. It contains the following:
@@ -64,7 +66,7 @@ class StorageContext:
 
     docstore: BaseDocumentStore
     index_store: BaseIndexStore
-    vector_stores: Dict[str, BasePydanticVectorStore]
+    vector_stores: Dict[str, SerializeAsAny[BasePydanticVectorStore]]
     graph_store: GraphStore
     property_graph_store: Optional[PropertyGraphStore] = None
 
@@ -81,7 +83,8 @@ class StorageContext:
         persist_dir: Optional[str] = None,
         fs: Optional[fsspec.AbstractFileSystem] = None,
     ) -> "StorageContext":
-        """Create a StorageContext from defaults.
+        """
+        Create a StorageContext from defaults.
 
         Args:
             docstore (Optional[BaseDocumentStore]): document store
@@ -156,10 +159,12 @@ class StorageContext:
         pg_graph_store_fname: str = PG_FNAME,
         fs: Optional[fsspec.AbstractFileSystem] = None,
     ) -> None:
-        """Persist the storage context.
+        """
+        Persist the storage context.
 
         Args:
             persist_dir (str): directory to persist the storage context
+
         """
         if fs is not None:
             persist_dir = str(persist_dir)  # NOTE: doesn't support Windows here
@@ -229,9 +234,11 @@ class StorageContext:
             DOC_STORE_KEY: self.docstore.to_dict(),
             INDEX_STORE_KEY: self.index_store.to_dict(),
             GRAPH_STORE_KEY: self.graph_store.to_dict(),
-            PG_STORE_KEY: self.property_graph_store.to_dict()
-            if self.property_graph_store
-            else None,
+            PG_STORE_KEY: (
+                self.property_graph_store.to_dict()
+                if self.property_graph_store
+                else None
+            ),
         }
 
     @classmethod

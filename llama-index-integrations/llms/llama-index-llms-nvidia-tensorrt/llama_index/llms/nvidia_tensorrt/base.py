@@ -61,7 +61,8 @@ PAD_TOKEN = 2
 
 
 class LocalTensorRTLLM(CustomLLM):
-    r"""Local TensorRT LLM.
+    r"""
+    Local TensorRT LLM.
 
     [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) provides users with an easy-to-use Python API to define Large Language Models (LLMs) and build TensorRT engines that contain state-of-the-art optimizations to perform inference
     efficiently on NVIDIA GPUs.
@@ -106,6 +107,7 @@ class LocalTensorRTLLM(CustomLLM):
         resp = llm.complete("Who is Paul Graham?")
         print(str(resp))
         ```
+
     """
 
     model_path: Optional[str] = Field(description="The path to the trt engine.")
@@ -162,8 +164,8 @@ class LocalTensorRTLLM(CustomLLM):
 
         model_kwargs = model_kwargs or {}
         model_kwargs.update({"n_ctx": context_window, "verbose": verbose})
-        self._max_new_tokens = max_new_tokens
-        self._verbose = verbose
+        max_new_tokens = max_new_tokens
+        verbose = verbose
         # check if model is cached
         if model_path is not None:
             if not os.path.exists(model_path):
@@ -188,9 +190,9 @@ class LocalTensorRTLLM(CustomLLM):
                 if "pipeline_parallel" in config["builder_config"]:
                     pp_size = config["builder_config"]["pipeline_parallel"]
                 world_size = tp_size * pp_size
-                assert (
-                    world_size == tensorrt_llm.mpi_world_size()
-                ), f"Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})"
+                assert world_size == tensorrt_llm.mpi_world_size(), (
+                    f"Engine world size ({world_size}) != Runtime world size ({tensorrt_llm.mpi_world_size()})"
+                )
                 num_heads = config["builder_config"]["num_heads"] // tp_size
                 hidden_size = config["builder_config"]["hidden_size"] // tp_size
                 vocab_size = config["builder_config"]["vocab_size"]
@@ -204,7 +206,7 @@ class LocalTensorRTLLM(CustomLLM):
                     num_kv_heads = 1
                 num_kv_heads = (num_kv_heads + tp_size - 1) // tp_size
 
-                self._model_config = ModelConfig(
+                model_config = ModelConfig(
                     num_heads=num_heads,
                     num_kv_heads=num_kv_heads,
                     hidden_size=hidden_size,
@@ -216,9 +218,9 @@ class LocalTensorRTLLM(CustomLLM):
                     max_batch_size=config["builder_config"]["max_batch_size"],
                 )
 
-                assert (
-                    pp_size == 1
-                ), "Python runtime does not support pipeline parallelism"
+                assert pp_size == 1, (
+                    "Python runtime does not support pipeline parallelism"
+                )
                 world_size = tp_size * pp_size
 
                 runtime_rank = tensorrt_llm.mpi_rank()
@@ -227,14 +229,12 @@ class LocalTensorRTLLM(CustomLLM):
                 )
 
                 # TensorRT-LLM must run on a GPU.
-                assert (
-                    torch.cuda.is_available()
-                ), "LocalTensorRTLLM requires a Nvidia CUDA enabled GPU to operate"
-                torch.cuda.set_device(runtime_rank % runtime_mapping.gpus_per_node)
-                self._tokenizer = AutoTokenizer.from_pretrained(
-                    tokenizer_dir, legacy=False
+                assert torch.cuda.is_available(), (
+                    "LocalTensorRTLLM requires a Nvidia CUDA enabled GPU to operate"
                 )
-                self._sampling_config = SamplingConfig(
+                torch.cuda.set_device(runtime_rank % runtime_mapping.gpus_per_node)
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir, legacy=False)
+                sampling_config = SamplingConfig(
                     end_id=EOS_TOKEN,
                     pad_id=PAD_TOKEN,
                     num_beams=1,
@@ -245,9 +245,9 @@ class LocalTensorRTLLM(CustomLLM):
                 with open(serialize_path, "rb") as f:
                     engine_buffer = f.read()
                 decoder = tensorrt_llm.runtime.GenerationSession(
-                    self._model_config, engine_buffer, runtime_mapping, debug_mode=False
+                    model_config, engine_buffer, runtime_mapping, debug_mode=False
                 )
-                self._model = decoder
+                model = decoder
 
         generate_kwargs = generate_kwargs or {}
         generate_kwargs.update(
@@ -266,6 +266,12 @@ class LocalTensorRTLLM(CustomLLM):
             model_kwargs=model_kwargs,
             verbose=verbose,
         )
+        self._model = model
+        self._model_config = model_config
+        self._tokenizer = tokenizer
+        self._sampling_config = sampling_config
+        self._max_new_tokens = max_new_tokens
+        self._verbose = verbose
 
     @classmethod
     def class_name(cls) -> str:

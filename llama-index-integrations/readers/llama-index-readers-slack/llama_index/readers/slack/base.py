@@ -1,4 +1,5 @@
 """Slack reader."""
+
 import logging
 import os
 import re
@@ -16,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class SlackReader(BasePydanticReader):
-    """Slack reader.
+    """
+    Slack reader.
 
     Reads conversations from channels. If an earliest_date is provided, an
     optional latest_date can also be provided. If no latest_date is provided,
@@ -32,12 +34,14 @@ class SlackReader(BasePydanticReader):
         latest_date (Optional[datetime]): Latest date from which to
             read conversations. If not provided, defaults to current timestamp
             in combination with earliest_date.
+
     """
 
     is_remote: bool = True
     slack_token: str
     earliest_date_timestamp: Optional[float]
     latest_date_timestamp: float
+    channel_types: str
 
     _client: Any = PrivateAttr()
 
@@ -49,6 +53,7 @@ class SlackReader(BasePydanticReader):
         latest_date: Optional[datetime] = None,
         earliest_date_timestamp: Optional[float] = None,
         latest_date_timestamp: Optional[float] = None,
+        channel_types: Optional[str] = None,
     ) -> None:
         """Initialize with parameters."""
         from slack_sdk import WebClient
@@ -61,9 +66,9 @@ class SlackReader(BasePydanticReader):
                 "variable `SLACK_BOT_TOKEN`."
             )
         if ssl is None:
-            self._client = WebClient(token=slack_token)
+            client = WebClient(token=slack_token)
         else:
-            self._client = WebClient(token=slack_token, ssl=ssl)
+            client = WebClient(token=slack_token, ssl=ssl)
         if latest_date is not None and earliest_date is None:
             raise ValueError(
                 "Must specify `earliest_date` if `latest_date` is specified."
@@ -76,7 +81,11 @@ class SlackReader(BasePydanticReader):
             latest_date_timestamp = latest_date.timestamp()
         else:
             latest_date_timestamp = datetime.now().timestamp() or latest_date_timestamp
-        res = self._client.api_test()
+        if channel_types is not None:
+            channel_types = channel_types
+        else:
+            channel_types = "public_channel,private_channel"
+        res = client.api_test()
         if not res["ok"]:
             raise ValueError(f"Error initializing Slack API: {res['error']}")
 
@@ -84,7 +93,9 @@ class SlackReader(BasePydanticReader):
             slack_token=slack_token,
             earliest_date_timestamp=earliest_date_timestamp,
             latest_date_timestamp=latest_date_timestamp,
+            channel_types=channel_types,
         )
+        self._client = client
 
     @classmethod
     def class_name(cls) -> str:
@@ -212,13 +223,15 @@ class SlackReader(BasePydanticReader):
     def load_data(
         self, channel_ids: List[str], reverse_chronological: bool = True
     ) -> List[Document]:
-        """Load data from the input slack channel ids.
+        """
+        Load data from the input slack channel ids.
 
         Args:
             channel_ids (List[str]): List of channel ids to read.
 
         Returns:
             List[Document]: List of documents.
+
         """
         results = []
         for channel_id in channel_ids:
@@ -243,13 +256,11 @@ class SlackReader(BasePydanticReader):
             return False
 
     def _list_channels(self) -> List[Dict[str, Any]]:
-        """List all channels (public and private)."""
+        """List channels based on the types."""
         from slack_sdk.errors import SlackApiError
 
         try:
-            result = self._client.conversations_list(
-                types="public_channel,private_channel"
-            )
+            result = self._client.conversations_list(types=self.channel_types)
             return result["channels"]
         except SlackApiError as e:
             logger.error(f"Error fetching channels: {e.response['error']}")
@@ -275,13 +286,15 @@ class SlackReader(BasePydanticReader):
         return filtered_channels
 
     def get_channel_ids(self, channel_patterns: List[str]) -> List[str]:
-        """Get list of channel IDs based on names and regex patterns.
+        """
+        Get list of channel IDs based on names and regex patterns.
 
         Args:
             channel_patterns List[str]: List of channel name patterns (names or regex) to read.
 
         Returns:
             List[Document]: List of documents.
+
         """
         if not channel_patterns:
             raise ValueError("No channel patterns provided.")

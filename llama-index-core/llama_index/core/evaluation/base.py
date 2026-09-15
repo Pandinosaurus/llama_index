@@ -1,4 +1,5 @@
 """Evaluator."""
+
 from abc import abstractmethod
 from typing import Any, Optional, Sequence
 
@@ -9,23 +10,26 @@ from llama_index.core.prompts.mixin import PromptMixin, PromptMixinType
 
 
 class EvaluationResult(BaseModel):
-    """Evaluation result.
+    """
+    Evaluation result.
 
     Output of an BaseEvaluator.
     """
 
-    query: Optional[str] = Field(None, description="Query string")
-    contexts: Optional[Sequence[str]] = Field(None, description="Context strings")
-    response: Optional[str] = Field(None, description="Response string")
+    query: Optional[str] = Field(default=None, description="Query string")
+    contexts: Optional[Sequence[str]] = Field(
+        default=None, description="Context strings"
+    )
+    response: Optional[str] = Field(default=None, description="Response string")
     passing: Optional[bool] = Field(
-        None, description="Binary evaluation result (passing or not)"
+        default=None, description="Binary evaluation result (passing or not)"
     )
     feedback: Optional[str] = Field(
-        None, description="Feedback or reasoning for the response"
+        default=None, description="Feedback or reasoning for the response"
     )
-    score: Optional[float] = Field(None, description="Score for the response")
+    score: Optional[float] = Field(default=None, description="Score for the response")
     pairwise_source: Optional[str] = Field(
-        None,
+        default=None,
         description=(
             "Used only for pairwise and specifies whether it is from original order of"
             " presented answers or flipped order"
@@ -53,7 +57,8 @@ class BaseEvaluator(PromptMixin):
         contexts: Optional[Sequence[str]] = None,
         **kwargs: Any,
     ) -> EvaluationResult:
-        """Run evaluation with query string, retrieved contexts,
+        """
+        Run evaluation with query string, retrieved contexts,
         and generated response string.
 
         Subclasses can override this method to provide custom evaluation logic and
@@ -76,7 +81,8 @@ class BaseEvaluator(PromptMixin):
         contexts: Optional[Sequence[str]] = None,
         **kwargs: Any,
     ) -> EvaluationResult:
-        """Run evaluation with query string, retrieved contexts,
+        """
+        Run evaluation with query string, retrieved contexts,
         and generated response string.
 
         Subclasses can override this method to provide custom evaluation logic and
@@ -90,7 +96,8 @@ class BaseEvaluator(PromptMixin):
         response: Optional[Response] = None,
         **kwargs: Any,
     ) -> EvaluationResult:
-        """Run evaluation with query string and generated Response object.
+        """
+        Run evaluation with query string and generated Response object.
 
         Subclasses can override this method to provide custom evaluation logic and
         take in additional arguments.
@@ -111,7 +118,8 @@ class BaseEvaluator(PromptMixin):
         response: Optional[Response] = None,
         **kwargs: Any,
     ) -> EvaluationResult:
-        """Run evaluation with query string and generated Response object.
+        """
+        Run evaluation with query string and generated Response object.
 
         Subclasses can override this method to provide custom evaluation logic and
         take in additional arguments.

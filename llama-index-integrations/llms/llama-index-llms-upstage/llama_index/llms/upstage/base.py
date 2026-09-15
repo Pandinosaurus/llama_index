@@ -1,11 +1,26 @@
-from typing import Optional, Dict, Any, Sequence, Callable
+import os
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Sequence, Callable, Union, Literal
+import warnings
 
 import httpx
-from llama_index.core.base.llms.types import LLMMetadata, ChatMessage
+from llama_index.readers.upstage import UpstageDocumentParseReader
+from llama_index.llms.openai.utils import (
+    create_retry_decorator,
+)
+from llama_index.core.base.llms.types import (
+    LLMMetadata,
+    ChatMessage,
+    ChatResponseGen,
+    ChatResponse,
+    ChatResponseAsyncGen,
+)
 from llama_index.llms.openai import OpenAI
 from llama_index.llms.openai.base import to_openai_message_dicts
 
 from llama_index.llms.upstage.utils import (
+    SOLAR_TOKENIZERS,
+    is_doc_parsing_model,
     resolve_upstage_credentials,
     is_chat_model,
     upstage_modelname_to_contextsize,
@@ -15,15 +30,24 @@ from llama_index.core.callbacks import CallbackManager
 from llama_index.core.constants import DEFAULT_TEMPERATURE
 from llama_index.core.types import BaseOutputParser, PydanticProgramMode
 from tokenizers import Tokenizer
-from pydantic import Field, PrivateAttr
+from pydantic import ConfigDict, Field, PrivateAttr
 from openai import OpenAI as SyncOpenAI
 from openai import AsyncOpenAI
 
-DEFAULT_UPSTAGE_MODEL = "solar-1-mini-chat"
+DEFAULT_UPSTAGE_MODEL = "solar-mini"
+
+llm_retry_decorator = create_retry_decorator(
+    max_retries=6,
+    random_exponential=True,
+    stop_after_delay_seconds=60,
+    min_seconds=1,
+    max_seconds=20,
+)
 
 
 class Upstage(OpenAI):
-    """Upstage LLM.
+    """
+    Upstage LLM.
 
     Examples:
         `pip install llama-index-llms-upstage`
@@ -41,8 +65,10 @@ class Upstage(OpenAI):
             print(response.delta, end="")
 
         ```
+
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
     model: str = Field(
         default=DEFAULT_UPSTAGE_MODEL, description="The Upstage model to use."
     )
@@ -58,11 +84,9 @@ class Upstage(OpenAI):
     logprobs: Optional[bool] = Field(
         description="Whether to return logprobs per token."
     )
-    top_logprobs: int = Field(
+    top_logprobs: Optional[int] = Field(
+        default=None,
         description="The number of top token logprobs to return.",
-        default=0,
-        gte=0,
-        lte=20,
     )
     additional_kwargs: Dict[str, Any] = Field(
         description="Additional kwargs for the Upstage API.", default_factory=dict
@@ -85,7 +109,7 @@ class Upstage(OpenAI):
             "Huggingface pretrained tokenizer name "
             "upstage opened solar tokenizer in Huggingface. https://huggingface.co/upstage/solar-1-mini-tokenizer"
         ),
-        default="upstage/solar-1-mini-tokenizer",
+        default=SOLAR_TOKENIZERS[DEFAULT_UPSTAGE_MODEL],
     )
 
     api_key: str = Field(
@@ -94,6 +118,34 @@ class Upstage(OpenAI):
     api_base: str = Field(
         default="https://api.upstage.ai/v1/solar",
         description="The Upstage API base URL.",
+    )
+    top_p: Optional[float] = Field(
+        default=None,
+        description="An optional parameter to trigger nucleus sampling.",
+    )
+    frequency_penalty: Optional[float] = Field(
+        default=None,
+        description="An optional parameter that controls the model's tendency to repeat tokens.",
+    )
+    presence_penalty: Optional[float] = Field(
+        default=None,
+        description="An optional parameter that adjusts the model's tendency to include tokens already present in the input or generated text.",
+    )
+    response_format: Optional[dict] = Field(
+        default=None,
+        description="An object specifying the format that the model must generate.",
+    )
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = Field(
+        default=None,
+        description="Controls the level of reasoning effort. This parameter is only applicable to Reasoning models.",
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        description="An optional parameter to limit sampling to the top K most likely tokens at each step. Lower values like 50 make the output more focused, while higher values allow more variety.",
+    )
+    prompt_cache_key: Optional[str] = Field(
+        default=None,
+        description="An optional parameter that specifies a unique key for identifying and caching the prompt. Use a distinct key for each conversational context to improve cache utilization.",
     )
 
     _client: Optional[SyncOpenAI] = PrivateAttr()
@@ -106,7 +158,7 @@ class Upstage(OpenAI):
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: Optional[int] = None,
         logprobs: Optional[bool] = None,
-        top_logprobs: int = 0,
+        top_logprobs: Optional[int] = None,
         additional_kwargs: Dict[str, Any] = None,
         max_retries: int = 3,
         timeout: float = 60.0,
@@ -122,14 +174,40 @@ class Upstage(OpenAI):
         completion_to_prompt: Optional[Callable[[str], str]] = None,
         pydantic_program_mode: PydanticProgramMode = PydanticProgramMode.DEFAULT,
         output_parser: Optional[BaseOutputParser] = None,
-        **kwargs: Any
+        reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
+        top_p: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[dict] = None,
+        top_k: Optional[int] = None,
+        prompt_cache_key: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         if "upstage_api_key" in kwargs:
             api_key = kwargs.pop("upstage_api_key")
         additional_kwargs = additional_kwargs or {}
+        # Add Upstage-specific parameters to additional_kwargs.
+        # These parameters are not supported by OpenAI API, so they must be passed via
+        # additional_kwargs. The base class will automatically merge them in _get_model_kwargs.
+        if reasoning_effort is not None:
+            additional_kwargs["reasoning_effort"] = reasoning_effort
+        if top_p is not None:
+            additional_kwargs["top_p"] = top_p
+        if frequency_penalty is not None:
+            additional_kwargs["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            additional_kwargs["presence_penalty"] = presence_penalty
+        if response_format is not None:
+            additional_kwargs["response_format"] = response_format
+        if top_k is not None:
+            additional_kwargs["top_k"] = top_k
+        if prompt_cache_key is not None:
+            additional_kwargs["prompt_cache_key"] = prompt_cache_key
         api_key, api_base = resolve_upstage_credentials(
             api_key=api_key, api_base=api_base
         )
+
+        default_headers = (default_headers or {}) | {"x-upstage-client": "llamaindex"}
 
         super().__init__(
             model=model,
@@ -151,7 +229,7 @@ class Upstage(OpenAI):
             completion_to_prompt=completion_to_prompt,
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
-            **kwargs
+            **kwargs,
         )
 
         self.tokenizer_name = tokenizer_name
@@ -185,6 +263,10 @@ class Upstage(OpenAI):
         """
         Get a Huggingface tokenizer for solar models.
         """
+        if SOLAR_TOKENIZERS.get(self.model) != self.tokenizer_name:
+            warnings.warn(
+                f"You are using a different tokenizer than the one specified in the model. This may cause issues with token counting. Please use {SOLAR_TOKENIZERS[self.model]} as the tokenizer name."
+            )
         return Tokenizer.from_pretrained(self.tokenizer_name)
 
     def get_num_tokens_from_message(self, messages: Sequence[ChatMessage]) -> int:
@@ -205,3 +287,60 @@ class Upstage(OpenAI):
                 )
         num_tokens += tokens_suffix
         return num_tokens
+
+    def _prepare_messages_for_doc_parsing(
+        self, messages: Sequence[ChatMessage], **kwargs: Any
+    ) -> Sequence[ChatMessage]:
+        """Prepare messages for document parsing if needed."""
+        if is_doc_parsing_model(self.model, kwargs):
+            document_contents = self._parse_documents(kwargs.pop("file_path"))
+            messages_list = (
+                list(messages) if not isinstance(messages, list) else messages
+            )
+            messages_list.append(ChatMessage(role="user", content=document_contents))
+            return messages_list
+        return messages
+
+    @llm_retry_decorator
+    def _chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        messages = self._prepare_messages_for_doc_parsing(messages, **kwargs)
+        return super()._chat(messages, **kwargs)
+
+    @llm_retry_decorator
+    def _achat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        messages = self._prepare_messages_for_doc_parsing(messages, **kwargs)
+        return super()._achat(messages, **kwargs)
+
+    @llm_retry_decorator
+    def _stream_chat(
+        self, messages: Sequence[ChatMessage], **kwargs: Any
+    ) -> ChatResponseGen:
+        messages = self._prepare_messages_for_doc_parsing(messages, **kwargs)
+        return super()._stream_chat(messages, **kwargs)
+
+    @llm_retry_decorator
+    def _astream_chat(
+        self, messages: Sequence[ChatMessage], **kwargs: Any
+    ) -> ChatResponseAsyncGen:
+        messages = self._prepare_messages_for_doc_parsing(messages, **kwargs)
+        return super()._astream_chat(messages, **kwargs)
+
+    def _parse_documents(
+        self, file_path: Union[str, Path, List[str], List[Path]]
+    ) -> str:
+        document_contents = "Documents:\n"
+
+        loader = UpstageDocumentParseReader(
+            api_key=self.api_key, output_format="text", coordinates=False
+        )
+        docs = loader.load_data(file_path)
+
+        if isinstance(file_path, list):
+            file_titles = [os.path.basename(path) for path in file_path]
+        else:
+            file_titles = [os.path.basename(file_path)]
+
+        for i, doc in enumerate(docs):
+            file_title = file_titles[min(i, len(file_titles) - 1)]
+            document_contents += f"{file_title}:\n{doc.text}\n\n"
+        return document_contents

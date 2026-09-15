@@ -17,11 +17,12 @@ Each collaborator is converted to a document by doing the following:
         - permissions: str, the permissions of the user, if available
 
 """
-import asyncio
+
 import enum
 import logging
 from typing import Dict, List
 
+from llama_index.core.async_utils import asyncio_run
 from llama_index.core.readers.base import BaseReader
 from llama_index.core.schema import Document
 from llama_index.readers.github.collaborators.github_client import (
@@ -80,21 +81,13 @@ class GitHubRepositoryCollaboratorsReader(BaseReader):
         Raises:
             - `ValueError`: If the github_token is not provided and
                 the GITHUB_TOKEN environment variable is not set.
+
         """
         super().__init__()
 
         self._owner = owner
         self._repo = repo
         self._verbose = verbose
-
-        # Set up the event loop
-        try:
-            self._loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # If there is no running loop, create a new one
-            self._loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._loop)
-
         self._github_client = github_client
 
     def load_data(
@@ -125,7 +118,7 @@ class GitHubRepositoryCollaboratorsReader(BaseReader):
         page = 1
         # Loop until there are no more collaborators
         while True:
-            collaborators: Dict = self._loop.run_until_complete(
+            collaborators: Dict = asyncio_run(
                 self._github_client.get_collaborators(
                     self._owner, self._repo, page=page
                 )

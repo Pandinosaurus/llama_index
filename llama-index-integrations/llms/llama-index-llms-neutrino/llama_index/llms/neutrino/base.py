@@ -15,7 +15,8 @@ MAX_CONTEXT_WINDOW = 200000
 
 
 class Neutrino(OpenAILike):
-    """Neutrino LLM.
+    """
+    Neutrino LLM.
 
     Examples:
         `pip install llama-index-llms-neutrino`
@@ -45,6 +46,7 @@ class Neutrino(OpenAILike):
         print(f"Optimal model: {response.raw['model']}")
         print(response)
         ```
+
     """
 
     model: str = Field(
@@ -57,7 +59,7 @@ class Neutrino(OpenAILike):
     )
     is_chat_model: bool = Field(
         default=True,
-        description=LLMMetadata.__fields__["is_chat_model"].field_info.description,
+        description=LLMMetadata.model_fields["is_chat_model"].description,
     )
 
     def __init__(

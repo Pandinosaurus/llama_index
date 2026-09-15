@@ -1,12 +1,10 @@
 from typing import Dict, Type
 
-from llama_index.core.llms.custom import CustomLLM
 from llama_index.core.llms.llm import LLM
 from llama_index.core.llms.mock import MockLLM
 
 RECOGNIZED_LLMS: Dict[str, Type[LLM]] = {
     MockLLM.class_name(): MockLLM,
-    CustomLLM.class_name(): CustomLLM,
 }
 
 # Conditionals for llama-cloud support
@@ -38,7 +36,7 @@ def load_llm(data: dict) -> LLM:
     """Load LLM by name."""
     if isinstance(data, LLM):
         return data
-    llm_name = data.get("class_name", None)
+    llm_name = data.get("class_name")
     if llm_name is None:
         raise ValueError("LLM loading requires a class_name")
 

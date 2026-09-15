@@ -4,7 +4,7 @@ from abc import ABC
 from collections import defaultdict
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Dict, Generator, List, Optional, cast
+from typing import Any, Dict, Generator, List, Optional, cast, Type
 
 from llama_index.core.callbacks.base_handler import BaseCallbackHandler
 from llama_index.core.callbacks.schema import (
@@ -13,6 +13,11 @@ from llama_index.core.callbacks.schema import (
     CBEventType,
     EventPayload,
 )
+from llama_index.core.bridge.pydantic import (
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+)
+from llama_index.core.bridge.pydantic_core import CoreSchema, core_schema
 
 logger = logging.getLogger(__name__)
 global_stack_trace = ContextVar("trace", default=[BASE_TRACE_EVENT])
@@ -77,7 +82,7 @@ class CallbackManager(BaseCallbackHandler, ABC):
             if cb_manager is not None:
                 handlers = cb_manager.handlers
 
-        self.handlers = handlers
+        self.handlers: List[BaseCallbackHandler] = handlers
         self._trace_map: Dict[str, List[str]] = defaultdict(list)
 
     def on_event_start(
@@ -148,11 +153,6 @@ class CallbackManager(BaseCallbackHandler, ABC):
         """Set handlers as the only handlers on the callback manager."""
         self.handlers = handlers
 
-    @classmethod
-    def __modify_schema__(cls, schema: Dict[str, Any]) -> None:
-        """Avoids serialization errors."""
-        schema.update(type="object", default={})
-
     @contextmanager
     def event(
         self,
@@ -160,7 +160,8 @@ class CallbackManager(BaseCallbackHandler, ABC):
         payload: Optional[Dict[str, Any]] = None,
         event_id: Optional[str] = None,
     ) -> Generator["EventContext", None, None]:
-        """Context manager for lanching and shutdown of events.
+        """
+        Context manager for lanching and shutdown of events.
 
         Handles sending on_evnt_start and on_event_end to handlers for specified event.
 
@@ -249,6 +250,19 @@ class CallbackManager(BaseCallbackHandler, ABC):
     @property
     def trace_map(self) -> Dict[str, List[str]]:
         return self._trace_map
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source: Type[Any], handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.any_schema()
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> Dict[str, Any]:
+        json_schema = handler(core_schema)
+        return handler.resolve_ref_schema(json_schema)
 
 
 class EventContext:

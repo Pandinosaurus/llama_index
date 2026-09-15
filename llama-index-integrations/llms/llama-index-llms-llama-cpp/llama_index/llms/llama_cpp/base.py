@@ -41,7 +41,8 @@ DEFAULT_LLAMA_CPP_MODEL_VERBOSITY = True
 
 
 class LlamaCPP(CustomLLM):
-    r"""LlamaCPP LLM.
+    r"""
+    LlamaCPP LLM.
 
     Examples:
         Install llama-cpp-python following instructions:
@@ -92,6 +93,7 @@ class LlamaCPP(CustomLLM):
         response = llm.complete("Hello, how are you?")
         print(str(response))
         ```
+
     """
 
     model_url: Optional[str] = Field(
@@ -103,8 +105,8 @@ class LlamaCPP(CustomLLM):
     temperature: float = Field(
         default=DEFAULT_TEMPERATURE,
         description="The temperature to use for sampling.",
-        gte=0.0,
-        lte=1.0,
+        ge=0.0,
+        le=1.0,
     )
     max_new_tokens: int = Field(
         default=DEFAULT_NUM_OUTPUTS,
@@ -159,7 +161,7 @@ class LlamaCPP(CustomLLM):
                     "Please check the path or provide a model_url to download."
                 )
             else:
-                self._model = Llama(model_path=model_path, **model_kwargs)
+                model = Llama(model_path=model_path, **model_kwargs)
         else:
             cache_dir = get_cache_dir()
             model_url = model_url or self._get_model_path_for_version()
@@ -170,7 +172,7 @@ class LlamaCPP(CustomLLM):
                 self._download_url(model_url, model_path)
                 assert os.path.exists(model_path)
 
-            self._model = Llama(model_path=model_path, **model_kwargs)
+            model = Llama(model_path=model_path, **model_kwargs)
 
         model_path = model_path
         generate_kwargs = generate_kwargs or {}
@@ -182,7 +184,10 @@ class LlamaCPP(CustomLLM):
             model_path=model_path,
             model_url=model_url,
             temperature=temperature,
-            context_window=context_window,
+            # llama.cpp resolves the effective context (model default when n_ctx is 0,
+            # clamped to what the model supports), so read it back off the loaded model
+            # instead of trusting the requested value.
+            context_window=model.n_ctx(),
             max_new_tokens=max_new_tokens,
             callback_manager=callback_manager,
             generate_kwargs=generate_kwargs,
@@ -194,6 +199,7 @@ class LlamaCPP(CustomLLM):
             pydantic_program_mode=pydantic_program_mode,
             output_parser=output_parser,
         )
+        self._model = model
 
     @classmethod
     def class_name(cls) -> str:
@@ -239,6 +245,7 @@ class LlamaCPP(CustomLLM):
                     for chunk in tqdm(
                         r.iter_content(chunk_size=chunk_size),
                         total=int(total_size / chunk_size),
+                        unit="MB",
                     ):
                         file.write(chunk)
             completed = True

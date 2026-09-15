@@ -1,6 +1,6 @@
 """Code splitter."""
 
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 from llama_index.core.bridge.pydantic import Field, PrivateAttr
 from llama_index.core.callbacks.base import CallbackManager
@@ -8,17 +8,23 @@ from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from llama_index.core.node_parser.interface import TextSplitter
 from llama_index.core.node_parser.node_utils import default_id_func
 from llama_index.core.schema import Document
+from llama_index.core.utils import get_tokenizer
 
 DEFAULT_CHUNK_LINES = 40
 DEFAULT_LINES_OVERLAP = 15
 DEFAULT_MAX_CHARS = 1500
+DEFAULT_MAX_TOKENS = 512
 
 
 class CodeSplitter(TextSplitter):
-    """Split code using a AST parser.
+    """
+    Split code using a AST parser.
 
     Thank you to Kevin Lu / SweepAI for suggesting this elegant code splitting solution.
     https://docs.sweep.dev/blogs/chunking-2m-files
+
+    Supports both character-based and token-based chunking modes for more precise
+    control over chunk sizes when working with language models.
     """
 
     language: str = Field(
@@ -39,7 +45,17 @@ class CodeSplitter(TextSplitter):
         description="Maximum number of characters per chunk.",
         gt=0,
     )
+    count_mode: Literal["token", "char"] = Field(
+        default="char",
+        description="Mode for counting chunk size: 'char' for characters, 'token' for tokens.",
+    )
+    max_tokens: int = Field(
+        default=DEFAULT_MAX_TOKENS,
+        description="Maximum number of tokens per chunk (used when count_mode='token').",
+        gt=0,
+    )
     _parser: Any = PrivateAttr()
+    _tokenizer: Callable = PrivateAttr()
 
     def __init__(
         self,
@@ -47,37 +63,33 @@ class CodeSplitter(TextSplitter):
         chunk_lines: int = DEFAULT_CHUNK_LINES,
         chunk_lines_overlap: int = DEFAULT_LINES_OVERLAP,
         max_chars: int = DEFAULT_MAX_CHARS,
+        count_mode: Literal["token", "char"] = "char",
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        tokenizer: Optional[Callable] = None,
         parser: Any = None,
         callback_manager: Optional[CallbackManager] = None,
         include_metadata: bool = True,
         include_prev_next_rel: bool = True,
         id_func: Optional[Callable[[int, Document], str]] = None,
     ) -> None:
-        """Initialize a CodeSplitter."""
-        from tree_sitter import Parser  # pants: no-infer-dep
+        """
+        Initialize a CodeSplitter.
 
-        if parser is None:
-            try:
-                import tree_sitter_languages  # pants: no-infer-dep
+        Args:
+            language: The programming language of the code being split.
+            chunk_lines: The number of lines to include in each chunk.
+            chunk_lines_overlap: How many lines of code each chunk overlaps with.
+            max_chars: Maximum number of characters per chunk.
+            count_mode: Mode for counting chunk size: 'char' for characters, 'token' for tokens.
+            max_tokens: Maximum number of tokens per chunk (used when count_mode='token').
+            tokenizer: Optional tokenizer function for token-based counting.
+            parser: Optional tree-sitter Parser object.
+            callback_manager: Optional callback manager.
+            include_metadata: Whether to include metadata in chunks.
+            include_prev_next_rel: Whether to include previous/next relationships.
+            id_func: Optional function to generate chunk IDs.
 
-                parser = tree_sitter_languages.get_parser(language)
-            except ImportError:
-                raise ImportError(
-                    "Please install tree_sitter_languages to use CodeSplitter."
-                    "Or pass in a parser object."
-                )
-            except Exception:
-                print(
-                    f"Could not get parser for language {language}. Check "
-                    "https://github.com/grantjenks/py-tree-sitter-languages#license "
-                    "for a list of valid languages."
-                )
-                raise
-        if not isinstance(parser, Parser):
-            raise ValueError("Parser must be a tree-sitter Parser object.")
-
-        self._parser = parser
-
+        """
         callback_manager = callback_manager or CallbackManager([])
         id_func = id_func or default_id_func
 
@@ -86,11 +98,43 @@ class CodeSplitter(TextSplitter):
             chunk_lines=chunk_lines,
             chunk_lines_overlap=chunk_lines_overlap,
             max_chars=max_chars,
+            count_mode=count_mode,
+            max_tokens=max_tokens,
             callback_manager=callback_manager,
             include_metadata=include_metadata,
             include_prev_next_rel=include_prev_next_rel,
             id_func=id_func,
         )
+
+        # Initialize tokenizer if using token mode
+        self._tokenizer = tokenizer or get_tokenizer()
+
+        if parser is None:
+            try:
+                import tree_sitter_language_pack  # pants: no-infer-dep
+
+                parser = tree_sitter_language_pack.get_parser(language)  # type: ignore
+            except ImportError:
+                raise ImportError(
+                    "Please install tree_sitter_language_pack to use CodeSplitter."
+                    "Or pass in a parser object."
+                )
+            except Exception:
+                print(
+                    f"Could not get parser for language {language}. Check "
+                    "https://github.com/Goldziher/tree-sitter-language-pack?tab=readme-ov-file#available-languages "
+                    "for a list of valid languages."
+                )
+                raise
+
+        if not hasattr(parser, "parse"):
+            raise ImportError(
+                "The installed version of tree-sitter-language-pack is not compatible. "
+                "Please install a compatible version: "
+                "pip install 'tree-sitter-language-pack<1.0'"
+            )
+
+        self._parser = parser
 
     @classmethod
     def from_defaults(
@@ -99,6 +143,9 @@ class CodeSplitter(TextSplitter):
         chunk_lines: int = DEFAULT_CHUNK_LINES,
         chunk_lines_overlap: int = DEFAULT_LINES_OVERLAP,
         max_chars: int = DEFAULT_MAX_CHARS,
+        count_mode: Literal["token", "char"] = "char",
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        tokenizer: Optional[Callable] = None,
         callback_manager: Optional[CallbackManager] = None,
         parser: Any = None,
     ) -> "CodeSplitter":
@@ -108,6 +155,10 @@ class CodeSplitter(TextSplitter):
             chunk_lines=chunk_lines,
             chunk_lines_overlap=chunk_lines_overlap,
             max_chars=max_chars,
+            count_mode=count_mode,
+            max_tokens=max_tokens,
+            tokenizer=tokenizer,
+            callback_manager=callback_manager,
             parser=parser,
         )
 
@@ -115,42 +166,145 @@ class CodeSplitter(TextSplitter):
     def class_name(cls) -> str:
         return "CodeSplitter"
 
-    def _chunk_node(self, node: Any, text: str, last_end: int = 0) -> List[str]:
+    def _chunk_node(self, node: Any, text_bytes: bytes, last_end: int = 0) -> List[str]:
+        """
+        Recursively chunk a node into smaller pieces based on character or token limits.
+
+        Args:
+            node (Any): The AST node to chunk.
+            text_bytes (bytes): The original source code text as bytes.
+            last_end (int, optional): The ending position of the last processed chunk. Defaults to 0.
+
+        Returns:
+            List[str]: A list of code chunks that respect the size limits.
+
+        """
         new_chunks = []
         current_chunk = ""
+        max_size = self.max_chars if self.count_mode == "char" else self.max_tokens
+
         for child in node.children:
-            if child.end_byte - child.start_byte > self.max_chars:
+            child_text = text_bytes[child.start_byte : child.end_byte].decode("utf-8")
+            child_size = (
+                len(child_text)
+                if self.count_mode == "char"
+                else len(self._tokenizer(child_text))
+            )
+
+            if child_size > max_size:
                 # Child is too big, recursively chunk the child
                 if len(current_chunk) > 0:
                     new_chunks.append(current_chunk)
                 current_chunk = ""
-                new_chunks.extend(self._chunk_node(child, text, last_end))
-            elif (
-                len(current_chunk) + child.end_byte - child.start_byte > self.max_chars
-            ):
-                # Child would make the current chunk too big, so start a new chunk
-                new_chunks.append(current_chunk)
-                current_chunk = text[last_end : child.end_byte]
+                if child.children:
+                    new_chunks.extend(self._chunk_node(child, text_bytes, last_end))
+                else:
+                    # Leaf node bigger than the limit (e.g. a long string
+                    # literal or comment). It has no sub-structure to recurse
+                    # into, so hard-split its text to preserve the content
+                    # instead of silently dropping it.
+                    leaf_text = text_bytes[last_end : child.end_byte].decode("utf-8")
+                    new_chunks.extend(self._split_oversized_leaf(leaf_text, max_size))
             else:
-                current_chunk += text[last_end : child.end_byte]
+                # Calculate what adding this child would do to current chunk size
+                new_chunk_text = current_chunk + text_bytes[
+                    last_end : child.end_byte
+                ].decode("utf-8")
+                new_chunk_size = (
+                    len(new_chunk_text)
+                    if self.count_mode == "char"
+                    else len(self._tokenizer(new_chunk_text))
+                )
+
+                if new_chunk_size > max_size:
+                    # Child would make the current chunk too big, so start a new chunk
+                    if len(current_chunk) > 0:
+                        new_chunks.append(current_chunk)
+                    current_chunk = text_bytes[last_end : child.end_byte].decode(
+                        "utf-8"
+                    )
+                else:
+                    current_chunk += text_bytes[last_end : child.end_byte].decode(
+                        "utf-8"
+                    )
             last_end = child.end_byte
+
         if len(current_chunk) > 0:
             new_chunks.append(current_chunk)
         return new_chunks
 
+    def _split_oversized_leaf(self, text: str, max_size: int) -> List[str]:
+        """
+        Hard-split text from a leaf node that exceeds the size limit.
+
+        A leaf AST node (such as a long string literal or comment) has no
+        children to recurse into, so its text is split directly to keep the
+        content within the size limit instead of dropping it.
+
+        Args:
+            text (str): The leaf node text to split.
+            max_size (int): The maximum chunk size, in characters or tokens
+                depending on ``count_mode``.
+
+        Returns:
+            List[str]: Chunks that respect ``max_size`` where possible. A piece
+                that cannot be reduced further (e.g. a single character whose
+                token count already exceeds ``max_size``) is kept as-is rather
+                than dropped.
+
+        """
+        if not text:
+            return []
+
+        if self.count_mode == "char":
+            return [text[i : i + max_size] for i in range(0, len(text), max_size)]
+
+        # Token mode: greedily accumulate characters while staying within the
+        # token budget. This keeps the split reversible (decoding token ids is
+        # not guaranteed for an arbitrary tokenizer).
+        chunks: List[str] = []
+        current = ""
+        for char in text:
+            if current and len(self._tokenizer(current + char)) > max_size:
+                chunks.append(current)
+                current = char
+            else:
+                current += char
+        if current:
+            chunks.append(current)
+        return chunks
+
     def split_text(self, text: str) -> List[str]:
-        """Split incoming code and return chunks using the AST."""
+        """
+        Split incoming code into chunks using the AST parser.
+
+        This method parses the input code into an AST and then chunks it while preserving
+        syntactic structure. Supports both character-based and token-based chunking modes
+        for more precise control over chunk sizes.
+
+        Args:
+            text (str): The source code text to split.
+
+        Returns:
+            List[str]: A list of code chunks that respect size limits based on count_mode.
+
+        Raises:
+            ValueError: If the code cannot be parsed for the specified language.
+
+        """
         with self.callback_manager.event(
             CBEventType.CHUNKING, payload={EventPayload.CHUNKS: [text]}
         ) as event:
-            tree = self._parser.parse(bytes(text, "utf-8"))
+            text_bytes = bytes(text, "utf-8")
+            tree = self._parser.parse(text_bytes)
 
             if (
                 not tree.root_node.children
                 or tree.root_node.children[0].type != "ERROR"
             ):
                 chunks = [
-                    chunk.strip() for chunk in self._chunk_node(tree.root_node, text)
+                    chunk.strip()
+                    for chunk in self._chunk_node(tree.root_node, text_bytes)
                 ]
                 event.on_end(
                     payload={EventPayload.CHUNKS: chunks},

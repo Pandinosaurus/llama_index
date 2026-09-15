@@ -71,7 +71,7 @@ router = APIRouter()
 def is_expected_response_type(media_type, response_type):
     if media_type == "application/json" and response_type not in [dict, list]:
         return True
-    return bool(media_type == "text/csv" and response_type != str)
+    return bool(media_type == "text/csv" and response_type is not str)
 
 
 # pipeline-api
@@ -305,7 +305,8 @@ def ungz_file(file: UploadFile, gz_uncompressed_content_type=None) -> UploadFile
     if filename.endswith(".gz"):
         filename = filename[:-3]
 
-    gzip_file = gzip.open(file.file).read()
+    with gzip.open(file.file) as gz:
+        gzip_file = gz.read()
     return UploadFile(
         file=io.BytesIO(gzip_file),
         size=len(gzip_file),

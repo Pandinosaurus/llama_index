@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, cast
+from typing import Any, Dict, List, Optional, Sequence, cast
 
 import fsspec
 from dataclasses_json import DataClassJsonMixin
@@ -21,13 +21,14 @@ from llama_index.core.vector_stores.types import (
     DEFAULT_PERSIST_FNAME,
     BasePydanticVectorStore,
     MetadataFilters,
-    FilterCondition,
-    FilterOperator,
     VectorStoreQuery,
     VectorStoreQueryMode,
     VectorStoreQueryResult,
 )
-from llama_index.core.vector_stores.utils import node_to_metadata_dict
+from llama_index.core.vector_stores.utils import (
+    node_to_metadata_dict,
+    build_metadata_filter_fn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,76 +44,10 @@ NAMESPACE_SEP = "__"
 DEFAULT_VECTOR_STORE = "default"
 
 
-def _build_metadata_filter_fn(
-    metadata_lookup_fn: Callable[[str], Mapping[str, Any]],
-    metadata_filters: Optional[MetadataFilters] = None,
-) -> Callable[[str], bool]:
-    """Build metadata filter function."""
-    filter_list = metadata_filters.filters if metadata_filters else []
-    if not filter_list:
-        return lambda _: True
-
-    filter_condition = cast(MetadataFilters, metadata_filters.condition)
-
-    def filter_fn(node_id: str) -> bool:
-        def _process_filter_match(
-            operator: FilterOperator, value: Any, metadata_value: Any
-        ) -> bool:
-            if metadata_value is None:
-                return False
-            if operator == FilterOperator.EQ:
-                return metadata_value == value
-            if operator == FilterOperator.NE:
-                return metadata_value != value
-            if operator == FilterOperator.GT:
-                return metadata_value > value
-            if operator == FilterOperator.GTE:
-                return metadata_value >= value
-            if operator == FilterOperator.LT:
-                return metadata_value < value
-            if operator == FilterOperator.LTE:
-                return metadata_value <= value
-            if operator == FilterOperator.IN:
-                return metadata_value in value
-            if operator == FilterOperator.NIN:
-                return metadata_value not in value
-            if operator == FilterOperator.CONTAINS:
-                return value in metadata_value
-            if operator == FilterOperator.TEXT_MATCH:
-                return value.lower() in metadata_value.lower()
-            if operator == FilterOperator.ALL:
-                return all(val in metadata_value for val in value)
-            if operator == FilterOperator.ANY:
-                return any(val in metadata_value for val in value)
-            raise ValueError(f"Invalid operator: {operator}")
-
-        metadata = metadata_lookup_fn(node_id)
-
-        filter_matches_list = []
-        for filter_ in filter_list:
-            filter_matches = True
-
-            filter_matches = _process_filter_match(
-                operator=filter_.operator,
-                value=filter_.value,
-                metadata_value=metadata.get(filter_.key, None),
-            )
-
-            filter_matches_list.append(filter_matches)
-
-        if filter_condition == FilterCondition.AND:
-            return all(filter_matches_list)
-        elif filter_condition == FilterCondition.OR:
-            return any(filter_matches_list)
-        else:
-            raise ValueError(f"Invalid filter condition: {filter_condition}")
-
-    return filter_fn
-
-
 @dataclass
 class SimpleVectorStoreData(DataClassJsonMixin):
-    """Simple Vector Store Data container.
+    """
+    Simple Vector Store Data container.
 
     Args:
         embedding_dict (Optional[dict]): dict mapping node_ids to embeddings.
@@ -127,7 +62,8 @@ class SimpleVectorStoreData(DataClassJsonMixin):
 
 
 class SimpleVectorStore(BasePydanticVectorStore):
-    """Simple Vector Store.
+    """
+    Simple Vector Store.
 
     In this vector store, embeddings are stored within a simple, in-memory dictionary.
 
@@ -135,6 +71,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
         simple_vector_store_data_dict (Optional[dict]): data dict
             containing the embeddings and doc_ids. See SimpleVectorStoreData
             for more details.
+
     """
 
     stores_text: bool = False
@@ -149,21 +86,18 @@ class SimpleVectorStore(BasePydanticVectorStore):
         **kwargs: Any,
     ) -> None:
         """Initialize params."""
-        super().__init__(data=data or SimpleVectorStoreData())
+        super().__init__(data=data or SimpleVectorStoreData())  # type: ignore[call-arg]
         self._fs = fs or fsspec.filesystem("file")
 
     @classmethod
     def from_persist_dir(
         cls,
         persist_dir: str = DEFAULT_PERSIST_DIR,
-        namespace: Optional[str] = None,
+        namespace: str = DEFAULT_VECTOR_STORE,
         fs: Optional[fsspec.AbstractFileSystem] = None,
     ) -> "SimpleVectorStore":
         """Load from persist dir."""
-        if namespace:
-            persist_fname = f"{namespace}{NAMESPACE_SEP}{DEFAULT_PERSIST_FNAME}"
-        else:
-            persist_fname = DEFAULT_PERSIST_FNAME
+        persist_fname = f"{namespace}{NAMESPACE_SEP}{DEFAULT_PERSIST_FNAME}"
 
         if fs is not None:
             persist_path = concat_dirs(persist_dir, persist_fname)
@@ -239,7 +173,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
 
     def add(
         self,
-        nodes: List[BaseNode],
+        nodes: Sequence[BaseNode],
         **add_kwargs: Any,
     ) -> List[str]:
         """Add nodes to index."""
@@ -282,7 +216,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
         filters: Optional[MetadataFilters] = None,
         **delete_kwargs: Any,
     ) -> None:
-        filter_fn = _build_metadata_filter_fn(
+        filter_fn = build_metadata_filter_fn(
             lambda node_id: self.data.metadata_dict[node_id], filters
         )
 
@@ -324,7 +258,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
                 "Please rebuild the store with metadata to enable filtering."
             )
         # Prefilter nodes based on the query filter and node ID restrictions.
-        query_filter_fn = _build_metadata_filter_fn(
+        query_filter_fn = build_metadata_filter_fn(
             lambda node_id: self.data.metadata_dict[node_id], query.filters
         )
 
@@ -357,7 +291,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
                 embedding_ids=node_ids,
             )
         elif query.mode == MMR_MODE:
-            mmr_threshold = kwargs.get("mmr_threshold", None)
+            mmr_threshold = kwargs.get("mmr_threshold")
             top_similarities, top_ids = get_top_k_mmr_embeddings(
                 query_embedding,
                 embeddings,
@@ -375,7 +309,10 @@ class SimpleVectorStore(BasePydanticVectorStore):
         else:
             raise ValueError(f"Invalid query mode: {query.mode}")
 
-        return VectorStoreQueryResult(similarities=top_similarities, ids=top_ids)
+        return VectorStoreQueryResult(
+            similarities=top_similarities,
+            ids=top_ids,
+        )
 
     def persist(
         self,
@@ -388,7 +325,7 @@ class SimpleVectorStore(BasePydanticVectorStore):
         if not fs.exists(dirpath):
             fs.makedirs(dirpath)
 
-        with fs.open(persist_path, "w") as f:
+        with fs.open(persist_path, "w", encoding="utf-8") as f:
             json.dump(self.data.to_dict(), f)
 
     @classmethod
@@ -409,9 +346,9 @@ class SimpleVectorStore(BasePydanticVectorStore):
         return cls(data)
 
     @classmethod
-    def from_dict(cls, save_dict: dict) -> "SimpleVectorStore":
-        data = SimpleVectorStoreData.from_dict(save_dict)
-        return cls(data)
+    def from_dict(cls, data: Dict[str, Any], **kwargs: Any) -> "SimpleVectorStore":
+        save_data = SimpleVectorStoreData.from_dict(data)
+        return cls(save_data)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, **kwargs: Any) -> Dict[str, Any]:
         return self.data.to_dict()

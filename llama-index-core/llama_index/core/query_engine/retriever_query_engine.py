@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, Type
 
 from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core.base.base_retriever import BaseRetriever
@@ -16,25 +16,22 @@ from llama_index.core.response_synthesizers import (
     get_response_synthesizer,
 )
 from llama_index.core.schema import NodeWithScore, QueryBundle
-from llama_index.core.service_context import ServiceContext
-from llama_index.core.settings import (
-    Settings,
-    callback_manager_from_settings_or_context,
-    llm_from_settings_or_context,
-)
+from llama_index.core.settings import Settings
 import llama_index.core.instrumentation as instrument
 
 dispatcher = instrument.get_dispatcher(__name__)
 
 
 class RetrieverQueryEngine(BaseQueryEngine):
-    """Retriever query engine.
+    """
+    Retriever query engine.
 
     Args:
         retriever (BaseRetriever): A retriever object.
         response_synthesizer (Optional[BaseSynthesizer]): A BaseSynthesizer
             object.
         callback_manager (Optional[CallbackManager]): A callback manager.
+
     """
 
     def __init__(
@@ -46,11 +43,8 @@ class RetrieverQueryEngine(BaseQueryEngine):
     ) -> None:
         self._retriever = retriever
         self._response_synthesizer = response_synthesizer or get_response_synthesizer(
-            llm=llm_from_settings_or_context(Settings, retriever.get_service_context()),
-            callback_manager=callback_manager
-            or callback_manager_from_settings_or_context(
-                Settings, retriever.get_service_context()
-            ),
+            llm=Settings.llm,
+            callback_manager=callback_manager or Settings.callback_manager,
         )
 
         self._node_postprocessors = node_postprocessors or []
@@ -72,57 +66,71 @@ class RetrieverQueryEngine(BaseQueryEngine):
         llm: Optional[LLM] = None,
         response_synthesizer: Optional[BaseSynthesizer] = None,
         node_postprocessors: Optional[List[BaseNodePostprocessor]] = None,
+        callback_manager: Optional[CallbackManager] = None,
         # response synthesizer args
         response_mode: ResponseMode = ResponseMode.COMPACT,
         text_qa_template: Optional[BasePromptTemplate] = None,
         refine_template: Optional[BasePromptTemplate] = None,
         summary_template: Optional[BasePromptTemplate] = None,
         simple_template: Optional[BasePromptTemplate] = None,
-        output_cls: Optional[BaseModel] = None,
+        chat_content_qa_template: Optional[BasePromptTemplate] = None,
+        chat_content_refine_template: Optional[BasePromptTemplate] = None,
+        output_cls: Optional[Type[BaseModel]] = None,
         use_async: bool = False,
         streaming: bool = False,
-        # deprecated
-        service_context: Optional[ServiceContext] = None,
+        verbose: bool = False,
+        multimodal: bool = False,
         **kwargs: Any,
     ) -> "RetrieverQueryEngine":
-        """Initialize a RetrieverQueryEngine object.".
+        """
+        Initialize a RetrieverQueryEngine object.".
 
         Args:
             retriever (BaseRetriever): A retriever object.
-            service_context (Optional[ServiceContext]): A ServiceContext object.
+            llm (Optional[LLM]): An instance of an LLM.
+            response_synthesizer (Optional[BaseSynthesizer]): An instance of a response
+                synthesizer.
             node_postprocessors (Optional[List[BaseNodePostprocessor]]): A list of
                 node postprocessors.
-            verbose (bool): Whether to print out debug info.
+            callback_manager (Optional[CallbackManager]): A callback manager.
             response_mode (ResponseMode): A ResponseMode object.
             text_qa_template (Optional[BasePromptTemplate]): A BasePromptTemplate
                 object.
             refine_template (Optional[BasePromptTemplate]): A BasePromptTemplate object.
+            summary_template (Optional[BasePromptTemplate]): A BasePromptTemplate object.
             simple_template (Optional[BasePromptTemplate]): A BasePromptTemplate object.
-
+            chat_content_qa_template (Optional[BasePromptTemplate]): Multimodal QA
+                prompt used when ``multimodal=True``.
+            chat_content_refine_template (Optional[BasePromptTemplate]): Multimodal
+                refine prompt used when ``multimodal=True``.
+            output_cls (Optional[Type[BaseModel]]): The pydantic model to pass to the
+                response synthesizer.
             use_async (bool): Whether to use async.
             streaming (bool): Whether to use streaming.
-            optimizer (Optional[BaseTokenUsageOptimizer]): A BaseTokenUsageOptimizer
-                object.
+            verbose (bool): Whether to print verbose output.
+            multimodal (bool): If True, configure the synthesizer to consume
+                multimodal content blocks from retrieved nodes.
 
         """
-        llm = llm or llm_from_settings_or_context(Settings, service_context)
+        llm = llm or Settings.llm
 
         response_synthesizer = response_synthesizer or get_response_synthesizer(
             llm=llm,
-            service_context=service_context,
             text_qa_template=text_qa_template,
             refine_template=refine_template,
             summary_template=summary_template,
             simple_template=simple_template,
+            chat_content_qa_template=chat_content_qa_template,
+            chat_content_refine_template=chat_content_refine_template,
             response_mode=response_mode,
             output_cls=output_cls,
             use_async=use_async,
             streaming=streaming,
+            verbose=verbose,
+            multimodal=multimodal,
         )
 
-        callback_manager = callback_manager_from_settings_or_context(
-            Settings, service_context
-        )
+        callback_manager = callback_manager or Settings.callback_manager
 
         return cls(
             retriever=retriever,
@@ -140,13 +148,24 @@ class RetrieverQueryEngine(BaseQueryEngine):
             )
         return nodes
 
+    async def _async_apply_node_postprocessors(
+        self, nodes: List[NodeWithScore], query_bundle: QueryBundle
+    ) -> List[NodeWithScore]:
+        for node_postprocessor in self._node_postprocessors:
+            nodes = await node_postprocessor.apostprocess_nodes(
+                nodes, query_bundle=query_bundle
+            )
+        return nodes
+
     def retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         nodes = self._retriever.retrieve(query_bundle)
         return self._apply_node_postprocessors(nodes, query_bundle=query_bundle)
 
     async def aretrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         nodes = await self._retriever.aretrieve(query_bundle)
-        return self._apply_node_postprocessors(nodes, query_bundle=query_bundle)
+        return await self._async_apply_node_postprocessors(
+            nodes, query_bundle=query_bundle
+        )
 
     def with_retriever(self, retriever: BaseRetriever) -> "RetrieverQueryEngine":
         return RetrieverQueryEngine(

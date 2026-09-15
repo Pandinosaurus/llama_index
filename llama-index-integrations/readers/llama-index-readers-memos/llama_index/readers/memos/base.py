@@ -8,7 +8,8 @@ from llama_index.core.schema import Document
 
 
 class MemosReader(BaseReader):
-    """Memos reader.
+    """
+    Memos reader.
 
     Reads content from an Memos.
 
@@ -19,7 +20,8 @@ class MemosReader(BaseReader):
         self._memoUrl = urljoin(host, "api/memo")
 
     def load_data(self, params: Dict = {}) -> List[Document]:
-        """Load data from RSS feeds.
+        """
+        Load data from RSS feeds.
 
         Args:
             params (Dict): Filtering parameters.
@@ -34,7 +36,7 @@ class MemosReader(BaseReader):
         realUrl = self._memoUrl
 
         if not params:
-            realUrl = urljoin(self._memoUrl, "all", False)
+            realUrl = urljoin(f"{self._memoUrl}/", "all")
 
         try:
             req = requests.get(realUrl, params)
@@ -51,7 +53,7 @@ class MemosReader(BaseReader):
             extra_info = {
                 "creator": memo["creator"],
                 "resource_list": memo["resourceList"],
-                id: memo["id"],
+                "id": memo["id"],
             }
             documents.append(Document(text=content, extra_info=extra_info))
 

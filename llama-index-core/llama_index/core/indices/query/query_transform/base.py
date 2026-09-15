@@ -2,17 +2,9 @@
 
 import dataclasses
 from abc import abstractmethod
-from typing import Any, Dict, Optional, cast
+from typing import Dict, Optional, cast
 
-from llama_index.core.base.query_pipeline.query import (
-    ChainableMixin,
-    InputKeys,
-    OutputKeys,
-    QueryComponent,
-    validate_and_convert_stringable,
-)
 from llama_index.core.base.response.schema import Response
-from llama_index.core.bridge.pydantic import Field
 from llama_index.core.indices.query.query_transform.prompts import (
     DEFAULT_DECOMPOSE_QUERY_TRANSFORM_PROMPT,
     DEFAULT_IMAGE_OUTPUT_PROMPT,
@@ -22,6 +14,7 @@ from llama_index.core.indices.query.query_transform.prompts import (
     StepDecomposeQueryTransformPrompt,
 )
 from llama_index.core.instrumentation import DispatcherSpanMixin
+from llama_index.core.llms import LLM
 from llama_index.core.prompts import BasePromptTemplate
 from llama_index.core.prompts.default_prompts import DEFAULT_HYDE_PROMPT
 from llama_index.core.prompts.mixin import (
@@ -30,14 +23,11 @@ from llama_index.core.prompts.mixin import (
     PromptMixinType,
 )
 from llama_index.core.schema import QueryBundle, QueryType
-from llama_index.core.service_context_elements.llm_predictor import (
-    LLMPredictorType,
-)
 from llama_index.core.settings import Settings
 from llama_index.core.utils import print_text
 
 
-class BaseQueryTransform(ChainableMixin, PromptMixin, DispatcherSpanMixin):
+class BaseQueryTransform(PromptMixin, DispatcherSpanMixin):
     """
     Base class for query transform.
 
@@ -82,10 +72,6 @@ class BaseQueryTransform(ChainableMixin, PromptMixin, DispatcherSpanMixin):
         """Run query processor."""
         return self.run(query_bundle_or_str, metadata=metadata)
 
-    def _as_query_component(self, **kwargs: Any) -> QueryComponent:
-        """As query component."""
-        return QueryTransformComponent(query_transform=self)
-
 
 class IdentityQueryTransform(BaseQueryTransform):
     """
@@ -120,7 +106,7 @@ class HyDEQueryTransform(BaseQueryTransform):
 
     def __init__(
         self,
-        llm: Optional[LLMPredictorType] = None,
+        llm: Optional[LLM] = None,
         hyde_prompt: Optional[BasePromptTemplate] = None,
         include_original: bool = True,
     ) -> None:
@@ -133,6 +119,7 @@ class HyDEQueryTransform(BaseQueryTransform):
             hyde_prompt (Optional[BasePromptTemplate]): Custom prompt for HyDE
             include_original (bool): Whether to include original query
                 string as one of the embedding strings
+
         """
         super().__init__()
 
@@ -178,14 +165,14 @@ class DecomposeQueryTransform(BaseQueryTransform):
 
     def __init__(
         self,
-        llm: Optional[LLMPredictorType] = None,
+        llm: Optional[LLM] = None,
         decompose_query_prompt: Optional[DecomposeQueryTransformPrompt] = None,
         verbose: bool = False,
     ) -> None:
         """Init params."""
         super().__init__()
         self._llm = llm or Settings.llm
-        self._decompose_query_prompt = (
+        self._decompose_query_prompt: BasePromptTemplate = (
             decompose_query_prompt or DEFAULT_DECOMPOSE_QUERY_TRANSFORM_PROMPT
         )
         self.verbose = verbose
@@ -244,9 +231,12 @@ class ImageOutputQueryTransform(BaseQueryTransform):
             width (int): desired image display width in pixels
             query_prompt (ImageOutputQueryTransformPrompt): custom prompt for
                 augmenting query with image output instructions.
+
         """
         self._width = width
-        self._query_prompt = query_prompt or DEFAULT_IMAGE_OUTPUT_PROMPT
+        self._query_prompt: BasePromptTemplate = (
+            query_prompt or DEFAULT_IMAGE_OUTPUT_PROMPT
+        )
 
     def _get_prompts(self) -> PromptDictType:
         """Get prompts."""
@@ -283,14 +273,14 @@ class StepDecomposeQueryTransform(BaseQueryTransform):
 
     def __init__(
         self,
-        llm: Optional[LLMPredictorType] = None,
+        llm: Optional[LLM] = None,
         step_decompose_query_prompt: Optional[StepDecomposeQueryTransformPrompt] = None,
         verbose: bool = False,
     ) -> None:
         """Init params."""
         super().__init__()
         self._llm = llm or Settings.llm
-        self._step_decompose_query_prompt = (
+        self._step_decompose_query_prompt: BasePromptTemplate = (
             step_decompose_query_prompt or DEFAULT_STEP_DECOMPOSE_QUERY_TRANSFORM_PROMPT
         )
         self.verbose = verbose
@@ -329,49 +319,3 @@ class StepDecomposeQueryTransform(BaseQueryTransform):
             query_str=new_query_str,
             custom_embedding_strs=query_bundle.custom_embedding_strs,
         )
-
-
-class QueryTransformComponent(QueryComponent):
-    """Query transform component."""
-
-    query_transform: BaseQueryTransform = Field(..., description="Query transform.")
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def set_callback_manager(self, callback_manager: Any) -> None:
-        """Set callback manager."""
-        # TODO: not implemented yet
-
-    def _validate_component_inputs(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate component inputs during run_component."""
-        if "query_str" not in input:
-            raise ValueError("Input must have key 'query_str'")
-        input["query_str"] = validate_and_convert_stringable(input["query_str"])
-
-        input["metadata"] = input.get("metadata", {})
-
-        return input
-
-    def _run_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        output = self.query_transform.run(
-            kwargs["query_str"],
-            metadata=kwargs["metadata"],
-        )
-        return {"query_str": output.query_str}
-
-    async def _arun_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        # TODO: true async not implemented yet
-        return self._run_component(**kwargs)
-
-    @property
-    def input_keys(self) -> InputKeys:
-        """Input keys."""
-        return InputKeys.from_keys({"query_str"}, optional_keys={"metadata"})
-
-    @property
-    def output_keys(self) -> OutputKeys:
-        """Output keys."""
-        return OutputKeys.from_keys({"query_str"})

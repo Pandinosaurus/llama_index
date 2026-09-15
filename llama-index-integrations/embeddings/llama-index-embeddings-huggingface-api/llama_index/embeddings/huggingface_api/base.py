@@ -61,7 +61,7 @@ class HuggingFaceInferenceAPIEmbedding(BaseEmbedding):  # type: ignore[misc]
             " Defaults to None, meaning it will loop until the server is available."
         ),
     )
-    headers: Dict[str, str] = Field(
+    headers: Optional[Dict[str, str]] = Field(
         default=None,
         description=(
             "Additional headers to send to the server. By default only the"
@@ -69,7 +69,7 @@ class HuggingFaceInferenceAPIEmbedding(BaseEmbedding):  # type: ignore[misc]
             " will override the default values."
         ),
     )
-    cookies: Dict[str, str] = Field(
+    cookies: Optional[Dict[str, str]] = Field(
         default=None, description="Additional cookies to send to the server."
     )
     task: Optional[str] = Field(
@@ -94,10 +94,12 @@ class HuggingFaceInferenceAPIEmbedding(BaseEmbedding):  # type: ignore[misc]
         }
 
     def __init__(self, **kwargs: Any) -> None:
-        """Initialize.
+        """
+        Initialize.
 
         Args:
             kwargs: See the class-level Fields.
+
         """
         if kwargs.get("model_name") is None:
             task = kwargs.get("task", "")
@@ -121,6 +123,7 @@ class HuggingFaceInferenceAPIEmbedding(BaseEmbedding):  # type: ignore[misc]
         Args:
             task: Hugging Face task to check within. A list of all tasks can be
                 found here: https://huggingface.co/tasks
+
         """
         all_models = self._sync_client.list_deployed_models(frameworks="all")
         try:

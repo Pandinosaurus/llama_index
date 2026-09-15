@@ -2,18 +2,9 @@
 
 import pickle
 import warnings
-from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Type, TypeVar
+from typing import Any, Callable, Generic, List, Optional, Sequence, Type, TypeVar
 
 from llama_index.core.base.base_retriever import BaseRetriever
-from llama_index.core.base.query_pipeline.query import (
-    ChainableMixin,
-    InputKeys,
-    OutputKeys,
-    QueryComponent,
-    validate_and_convert_stringable,
-)
-from llama_index.core.bridge.pydantic import Field
-from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.indices.base import BaseIndex
 from llama_index.core.indices.vector_store.base import VectorStoreIndex
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
@@ -22,7 +13,7 @@ from llama_index.core.objects.base_node_mapping import (
     BaseObjectNodeMapping,
     SimpleObjectNodeMapping,
 )
-from llama_index.core.schema import QueryBundle, QueryType, TextNode
+from llama_index.core.schema import BaseNode, QueryBundle, QueryType
 from llama_index.core.storage.storage_context import (
     DEFAULT_PERSIST_DIR,
     StorageContext,
@@ -31,7 +22,7 @@ from llama_index.core.storage.storage_context import (
 OT = TypeVar("OT")
 
 
-class ObjectRetriever(ChainableMixin, Generic[OT]):
+class ObjectRetriever(Generic[OT]):
     """Object retriever."""
 
     def __init__(
@@ -87,49 +78,6 @@ class ObjectRetriever(ChainableMixin, Generic[OT]):
 
         return [self._object_node_mapping.from_node(node.node) for node in nodes]
 
-    def _as_query_component(self, **kwargs: Any) -> QueryComponent:
-        """As query component."""
-        return ObjectRetrieverComponent(retriever=self)
-
-
-class ObjectRetrieverComponent(QueryComponent):
-    """Object retriever component."""
-
-    retriever: ObjectRetriever = Field(..., description="Retriever.")
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def set_callback_manager(self, callback_manager: CallbackManager) -> None:
-        """Set callback manager."""
-        self.retriever.retriever.callback_manager = callback_manager
-
-    def _validate_component_inputs(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate component inputs during run_component."""
-        # make sure input is a string
-        input["input"] = validate_and_convert_stringable(input["input"])
-        return input
-
-    def _run_component(self, **kwargs: Any) -> Any:
-        """Run component."""
-        output = self.retriever.retrieve(kwargs["input"])
-        return {"output": output}
-
-    async def _arun_component(self, **kwargs: Any) -> Any:
-        """Run component (async)."""
-        output = await self.retriever.aretrieve(kwargs["input"])
-        return {"output": output}
-
-    @property
-    def input_keys(self) -> InputKeys:
-        """Input keys."""
-        return InputKeys.from_keys({"input"})
-
-    @property
-    def output_keys(self) -> OutputKeys:
-        """Output keys."""
-        return OutputKeys.from_keys({"output"})
-
 
 class ObjectIndex(Generic[OT]):
     """Object index."""
@@ -155,8 +103,8 @@ class ObjectIndex(Generic[OT]):
         cls,
         objects: Sequence[OT],
         object_mapping: Optional[BaseObjectNodeMapping] = None,
-        from_node_fn: Optional[Callable[[TextNode], OT]] = None,
-        to_node_fn: Optional[Callable[[OT], TextNode]] = None,
+        from_node_fn: Optional[Callable[[BaseNode], OT]] = None,
+        to_node_fn: Optional[Callable[[OT], BaseNode]] = None,
         index_cls: Type[BaseIndex] = VectorStoreIndex,
         **index_kwargs: Any,
     ) -> "ObjectIndex":
@@ -180,8 +128,8 @@ class ObjectIndex(Generic[OT]):
         objects: Sequence[OT],
         index: BaseIndex,
         object_mapping: Optional[BaseObjectNodeMapping] = None,
-        from_node_fn: Optional[Callable[[TextNode], OT]] = None,
-        to_node_fn: Optional[Callable[[OT], TextNode]] = None,
+        from_node_fn: Optional[Callable[[BaseNode], OT]] = None,
+        to_node_fn: Optional[Callable[[OT], BaseNode]] = None,
     ) -> "ObjectIndex":
         from llama_index.core.objects.utils import get_object_mapping
 

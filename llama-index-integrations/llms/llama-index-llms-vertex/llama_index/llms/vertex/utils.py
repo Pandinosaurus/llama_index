@@ -47,6 +47,7 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
             | retry_if_exception_type(google.api_core.exceptions.ResourceExhausted)
             | retry_if_exception_type(google.api_core.exceptions.Aborted)
             | retry_if_exception_type(google.api_core.exceptions.DeadlineExceeded)
+            | retry_if_exception_type(google.api_core.exceptions.InternalServerError)
         ),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
@@ -92,7 +93,10 @@ def completion_with_retry(
             generation_config = kwargs if kwargs else {}
 
             return generation.send_message(
-                prompt, stream=stream, tools=tools, generation_config=generation_config
+                prompt,
+                stream=stream,
+                tools=tools,
+                generation_config=generation_config,
             )
         elif chat:
             generation = client.start_chat(**params)
@@ -131,7 +135,9 @@ async def acompletion_with_retry(
             tools = to_gemini_tools(tools) if tools else []
             generation_config = kwargs if kwargs else {}
             return await generation.send_message_async(
-                prompt, tools=tools, generation_config=generation_config
+                prompt,
+                tools=tools,
+                generation_config=generation_config,
             )
         elif chat:
             generation = client.start_chat(**params)
@@ -147,7 +153,8 @@ def init_vertexai(
     location: Optional[str] = None,
     credentials: Optional[Any] = None,
 ) -> None:
-    """Init vertexai.
+    """
+    Init vertexai.
 
     Args:
         project: The default GCP project to use when making Vertex API calls.
@@ -158,6 +165,7 @@ def init_vertexai(
 
     Raises:
         ImportError: If importing vertexai SDK did not succeed.
+
     """
     vertexai.init(
         project=project,
@@ -178,7 +186,8 @@ def _parse_message(message: ChatMessage, is_gemini: bool) -> Any:
 
 
 def _parse_chat_history(history: Any, is_gemini: bool) -> Any:
-    """Parse a sequence of messages into history.
+    """
+    Parse a sequence of messages into history.
 
     Args:
         history: The list of messages to re-create the history of the chat.
@@ -189,6 +198,7 @@ def _parse_chat_history(history: Any, is_gemini: bool) -> Any:
     Raises:
         ValueError: If a sequence of message has a SystemMessage not at the
         first place.
+
     """
     vertex_messages, context = [], None
     for i, message in enumerate(history):

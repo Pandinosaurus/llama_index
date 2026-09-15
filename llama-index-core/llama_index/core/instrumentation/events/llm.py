@@ -1,5 +1,5 @@
-from typing import Any, List, Optional
-from llama_index.core.bridge.pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+from llama_index.core.bridge.pydantic import BaseModel, SerializeAsAny, ConfigDict
 from llama_index.core.base.llms.types import (
     ChatMessage,
     ChatResponse,
@@ -10,174 +10,257 @@ from llama_index.core.prompts import BasePromptTemplate
 
 
 class LLMPredictStartEvent(BaseEvent):
-    """LLMPredictStartEvent.
+    """
+    LLMPredictStartEvent.
 
     Args:
         template (BasePromptTemplate): Prompt template.
         template_args (Optional[dict]): Prompt template arguments.
+
     """
 
-    template: BasePromptTemplate
+    template: SerializeAsAny[BasePromptTemplate]
     template_args: Optional[dict]
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMPredictStartEvent"
 
 
 class LLMPredictEndEvent(BaseEvent):
-    """LLMPredictEndEvent.
+    """
+    LLMPredictEndEvent.
 
     The result of an llm.predict() call.
 
     Args:
         output (str): Output.
+
     """
 
     output: str
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMPredictEndEvent"
 
 
 class LLMStructuredPredictStartEvent(BaseEvent):
-    """LLMStructuredPredictStartEvent.
+    """
+    LLMStructuredPredictStartEvent.
 
     Args:
         output_cls (Any): Output class to predict.
         template (BasePromptTemplate): Prompt template.
         template_args (Optional[dict]): Prompt template arguments.
+
     """
 
     output_cls: Any
-    template: BasePromptTemplate
+    template: SerializeAsAny[BasePromptTemplate]
     template_args: Optional[dict]
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMStructuredPredictStartEvent"
 
 
 class LLMStructuredPredictEndEvent(BaseEvent):
-    """LLMStructuredPredictEndEvent.
+    """
+    LLMStructuredPredictEndEvent.
 
     Args:
         output (BaseModel): Predicted output class.
+
     """
 
-    output: BaseModel
+    output: SerializeAsAny[Any]
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMStructuredPredictEndEvent"
 
 
+class LLMStructuredPredictInProgressEvent(BaseEvent):
+    """
+    LLMStructuredPredictInProgressEvent.
+
+    Args:
+        output (BaseModel): Predicted output class.
+
+    """
+
+    output: SerializeAsAny[Any]
+
+    @classmethod
+    def class_name(cls) -> str:
+        """Class name."""
+        return "LLMStructuredPredictInProgressEvent"
+
+
 class LLMCompletionStartEvent(BaseEvent):
-    """LLMCompletionStartEvent.
+    """
+    LLMCompletionStartEvent.
 
     Args:
         prompt (str): The prompt to be completed.
         additional_kwargs (dict): Additional keyword arguments.
         model_dict (dict): Model dictionary.
+
     """
 
+    model_config = ConfigDict(protected_namespaces=("pydantic_model_",))
     prompt: str
     additional_kwargs: dict
     model_dict: dict
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMCompletionStartEvent"
 
 
 class LLMCompletionInProgressEvent(BaseEvent):
-    """LLMCompletionInProgressEvent.
+    """
+    LLMCompletionInProgressEvent.
 
     Args:
         prompt (str): The prompt to be completed.
         response (CompletionResponse): Completion response.
+
     """
 
     prompt: str
     response: CompletionResponse
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMCompletionInProgressEvent"
 
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        if isinstance(self.response.raw, BaseModel):
+            return self.model_copy(
+                update={
+                    "response": self.response.model_copy(
+                        update={"raw": self.response.raw.model_dump()}
+                    )
+                }
+            ).model_dump(**kwargs)
+        return super().model_dump(**kwargs)
+
 
 class LLMCompletionEndEvent(BaseEvent):
-    """LLMCompletionEndEvent.
+    """
+    LLMCompletionEndEvent.
 
     Args:
         prompt (str): The prompt to be completed.
         response (CompletionResponse): Completion response.
+
     """
 
     prompt: str
     response: CompletionResponse
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMCompletionEndEvent"
 
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        if isinstance(self.response.raw, BaseModel):
+            return self.model_copy(
+                update={
+                    "response": self.response.model_copy(
+                        update={"raw": self.response.raw.model_dump()}
+                    )
+                }
+            ).model_dump(**kwargs)
+        return super().model_dump(**kwargs)
+
 
 class LLMChatStartEvent(BaseEvent):
-    """LLMChatStartEvent.
+    """
+    LLMChatStartEvent.
 
     Args:
         messages (List[ChatMessage]): List of chat messages.
         additional_kwargs (dict): Additional keyword arguments.
         model_dict (dict): Model dictionary.
+
     """
 
+    model_config = ConfigDict(protected_namespaces=("pydantic_model_",))
     messages: List[ChatMessage]
     additional_kwargs: dict
     model_dict: dict
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMChatStartEvent"
 
 
 class LLMChatInProgressEvent(BaseEvent):
-    """LLMChatInProgressEvent.
+    """
+    LLMChatInProgressEvent.
 
     Args:
         messages (List[ChatMessage]): List of chat messages.
         response (ChatResponse): Chat response currently being streamed.
+
     """
 
     messages: List[ChatMessage]
     response: ChatResponse
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMChatInProgressEvent"
 
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        if isinstance(self.response.raw, BaseModel):
+            return self.model_copy(
+                update={
+                    "response": self.response.model_copy(
+                        update={"raw": self.response.raw.model_dump()}
+                    )
+                }
+            ).model_dump(**kwargs)
+        return super().model_dump(**kwargs)
+
 
 class LLMChatEndEvent(BaseEvent):
-    """LLMChatEndEvent.
+    """
+    LLMChatEndEvent.
 
     Args:
         messages (List[ChatMessage]): List of chat messages.
         response (Optional[ChatResponse]): Last chat response.
+
     """
 
     messages: List[ChatMessage]
     response: Optional[ChatResponse]
 
     @classmethod
-    def class_name(cls):
+    def class_name(cls) -> str:
         """Class name."""
         return "LLMChatEndEvent"
+
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:
+        if self.response is not None and isinstance(self.response.raw, BaseModel):
+            return self.model_copy(
+                update={
+                    "response": self.response.model_copy(
+                        update={"raw": self.response.raw.model_dump()}
+                    )
+                }
+            ).model_dump(**kwargs)
+        return super().model_dump(**kwargs)

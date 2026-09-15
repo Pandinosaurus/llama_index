@@ -1,8 +1,9 @@
+# pants requires this import to recognize the dep
+import pytest_asyncio  # noqa: F401
+
 import pytest
 import os
 
-from llama_index.llms.nvidia import NVIDIA
-from llama_index.llms.nvidia.base import DEFAULT_MODEL
 
 from typing import Generator
 
@@ -13,16 +14,37 @@ from typing import Generator
 @pytest.fixture()
 def masked_env_var() -> Generator[str, None, None]:
     var = "NVIDIA_API_KEY"
+    # Save the current value of the environment variable, if it exists
+    val = os.environ.get(var, None)
+
+    # Remove the environment variable to simulate it being masked during the test
+    if val is not None:
+        del os.environ[var]
+
     try:
-        if val := os.environ.get(var, None):
-            del os.environ[var]
+        # Yield the original value so it can be used in the test
         yield val
     finally:
-        if val:
+        # Restore the original environment variable if it was set
+        if val is not None:
             os.environ[var] = val
+        else:
+            # If the variable was not originally set, ensure it's removed
+            if var in os.environ:
+                del os.environ[var]
 
 
 def pytest_collection_modifyitems(config, items):
+    for item in items:
+        # pytest-httpx >= 0.35 asserts that every registered mock is requested;
+        # these tests register broad mocks that individual cases don't all hit.
+        item.add_marker(
+            pytest.mark.httpx_mock(
+                assert_all_responses_were_requested=False,
+                assert_all_requests_were_expected=False,
+                can_send_already_matched_responses=True,
+            )
+        )
     if "NVIDIA_API_KEY" not in os.environ:
         skip_marker = pytest.mark.skip(
             reason="requires NVIDIA_API_KEY environment variable or --nim-endpoint option"
@@ -60,6 +82,9 @@ def get_mode(config: pytest.Config) -> dict:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    from llama_index.llms.nvidia import NVIDIA
+    from llama_index.llms.nvidia.base import DEFAULT_MODEL
+
     mode = get_mode(metafunc.config)
 
     if "chat_model" in metafunc.fixturenames:

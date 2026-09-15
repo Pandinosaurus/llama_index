@@ -23,7 +23,8 @@ DEFAULT_RUNGPT_TEMP = 0.75
 
 
 class RunGptLLM(LLM):
-    """RunGPT LLM.
+    """
+    RunGPT LLM.
 
     The opengpt of Jina AI models.
 
@@ -38,6 +39,7 @@ class RunGptLLM(LLM):
         response = llm.complete("What public transportation might be available in a city?")
         print(str(response))
         ```
+
     """
 
     model: Optional[str] = Field(
@@ -47,8 +49,8 @@ class RunGptLLM(LLM):
     temperature: float = Field(
         default=DEFAULT_RUNGPT_TEMP,
         description="The temperature to use for sampling.",
-        gte=0.0,
-        lte=1.0,
+        ge=0.0,
+        le=1.0,
     )
     max_tokens: int = Field(
         default=DEFAULT_NUM_OUTPUTS,

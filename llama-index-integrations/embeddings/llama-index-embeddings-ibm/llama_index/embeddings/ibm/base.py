@@ -4,14 +4,8 @@ from llama_index.core.base.embeddings.base import (
     DEFAULT_EMBED_BATCH_SIZE,
     BaseEmbedding,
 )
-from llama_index.core.bridge.pydantic import Field, PrivateAttr
+from llama_index.core.bridge.pydantic import Field, PrivateAttr, SecretStr
 
-# Import SecretStr directly from pydantic
-# since there is not one in llama_index.core.bridge.pydantic
-try:
-    from pydantic.v1 import SecretStr
-except ImportError:
-    from pydantic import SecretStr
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.embeddings.ibm.utils import (
     resolve_watsonx_credentials,
@@ -20,7 +14,7 @@ from llama_index.embeddings.ibm.utils import (
 from ibm_watsonx_ai import APIClient, Credentials
 from ibm_watsonx_ai.foundation_models.embeddings import Embeddings
 
-DEFAULT_EMBED_MODEL = "ibm/slate-125m-english-rtrvr"
+DEFAULT_EMBED_MODEL = "ibm/slate-125m-english-rtrvr-v2"
 
 
 class WatsonxEmbeddings(BaseEmbedding):
@@ -31,26 +25,27 @@ class WatsonxEmbeddings(BaseEmbedding):
         `pip install llama-index-embeddings-ibm`
 
         ```python
-
         from llama_index.embeddings.ibm import WatsonxEmbeddings
+
         watsonx_llm = WatsonxEmbeddings(
-            model_id="ibm/slate-125m-english-rtrvr",
+            model_id="ibm/slate-125m-english-rtrvr-v2",
             url="https://us-south.ml.cloud.ibm.com",
             apikey="*****",
             project_id="*****",
         )
         ```
+
     """
 
     model_id: str = Field(
         default=DEFAULT_EMBED_MODEL,
-        description="""Type of model to use.""",
+        description="Type of model to use.",
         allow_mutation=False,
     )
 
     truncate_input_tokens: Optional[int] = Field(
         default=None,
-        description="""Represents the maximum number of input tokens accepted.""",
+        description="Represents the maximum number of input tokens accepted.",
     )
 
     project_id: Optional[str] = Field(
@@ -61,42 +56,51 @@ class WatsonxEmbeddings(BaseEmbedding):
 
     space_id: Optional[str] = Field(
         default=None,
-        description="""ID of the Watson Studio space.""",
+        description="ID of the Watson Studio space.",
         allow_mutation=False,
     )
 
     url: Optional[SecretStr] = Field(
         default=None,
-        description="""Url to Watson Machine Learning or CPD instance""",
+        description="Url to the IBM watsonx.ai for IBM Cloud or the IBM watsonx.ai software instance.",
         allow_mutation=False,
     )
 
     apikey: Optional[SecretStr] = Field(
         default=None,
-        description="""Apikey to Watson Machine Learning or CPD instance""",
+        description="API key to the IBM watsonx.ai for IBM Cloud or the IBM watsonx.ai software instance.",
         allow_mutation=False,
     )
 
     token: Optional[SecretStr] = Field(
-        default=None, description="""Token to CPD instance""", allow_mutation=False
+        default=None,
+        description="Token to the IBM watsonx.ai software instance.",
+        allow_mutation=False,
     )
 
     password: Optional[SecretStr] = Field(
-        default=None, description="""Password to CPD instance""", allow_mutation=False
+        default=None,
+        description="Password to the IBM watsonx.ai software instance.",
+        allow_mutation=False,
     )
 
     username: Optional[SecretStr] = Field(
-        default=None, description="""Username to CPD instance""", allow_mutation=False
+        default=None,
+        description="Username to the IBM watsonx.ai software instance.",
+        allow_mutation=False,
     )
 
     instance_id: Optional[SecretStr] = Field(
         default=None,
-        description="""Instance_id of CPD instance""",
+        description="Instance_id of the IBM watsonx.ai software instance.",
         allow_mutation=False,
+        deprecated="The `instance_id` parameter is deprecated and will no longer be utilized for logging to the IBM watsonx.ai software instance.",
     )
 
     version: Optional[SecretStr] = Field(
-        default=None, description="""Version of CPD instance""", allow_mutation=False
+        default=None,
+        description="Version of the IBM watsonx.ai software instance.",
+        allow_mutation=False,
     )
 
     verify: Union[str, bool, None] = Field(
@@ -123,7 +127,6 @@ class WatsonxEmbeddings(BaseEmbedding):
         token: Optional[str] = None,
         password: Optional[str] = None,
         username: Optional[str] = None,
-        instance_id: Optional[str] = None,
         version: Optional[str] = None,
         verify: Union[str, bool, None] = None,
         api_client: Optional[APIClient] = None,
@@ -143,20 +146,28 @@ class WatsonxEmbeddings(BaseEmbedding):
                 token=token,
                 username=username,
                 password=password,
-                instance_id=instance_id,
             )
+
+        url = creds.get("url").get_secret_value() if creds.get("url") else None
+        apikey = creds.get("apikey").get_secret_value() if creds.get("apikey") else None
+        token = creds.get("token").get_secret_value() if creds.get("token") else None
+        password = (
+            creds.get("password").get_secret_value() if creds.get("password") else None
+        )
+        username = (
+            creds.get("username").get_secret_value() if creds.get("username") else None
+        )
 
         super().__init__(
             model_id=model_id,
             truncate_input_tokens=truncate_input_tokens,
             project_id=project_id,
             space_id=space_id,
-            url=creds.get("url"),
-            apikey=creds.get("apikey"),
-            token=creds.get("token"),
-            password=creds.get("password"),
-            username=creds.get("username"),
-            instance_id=creds.get("instance_id"),
+            url=url,
+            apikey=apikey,
+            token=token,
+            password=password,
+            username=username,
             version=version,
             verify=verify,
             callback_manager=callback_manager,
@@ -197,7 +208,6 @@ class WatsonxEmbeddings(BaseEmbedding):
             "token": self.token,
             "password": self.password,
             "username": self.username,
-            "instance_id": self.instance_id,
             "version": self.version,
         }
 

@@ -30,10 +30,7 @@ from llama_index.core.schema import (
     NodeWithScore,
     QueryBundle,
 )
-from llama_index.core.settings import (
-    Settings,
-    callback_manager_from_settings_or_context,
-)
+from llama_index.core.settings import Settings
 from llama_index.core.utils import print_text, truncate_text
 
 logger = logging.getLogger(__name__)
@@ -57,7 +54,8 @@ def get_text_from_node(
 
 
 class TreeSelectLeafRetriever(BaseRetriever):
-    """Tree select leaf retriever.
+    """
+    Tree select leaf retriever.
 
     This class traverses the index graph and searches for a leaf node that can best
     answer the query.
@@ -92,7 +90,6 @@ class TreeSelectLeafRetriever(BaseRetriever):
         self._llm = index._llm
         self._index_struct = index.index_struct
         self._docstore = index.docstore
-        self._service_context = index.service_context
         self._prompt_helper = Settings._prompt_helper or PromptHelper.from_llm_metadata(
             self._llm.metadata,
         )
@@ -105,10 +102,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
         )
         self.child_branch_factor = child_branch_factor
         super().__init__(
-            callback_manager=callback_manager
-            or callback_manager_from_settings_or_context(
-                Settings, index.service_context
-            ),
+            callback_manager=callback_manager or Settings.callback_manager,
             object_map=object_map,
             verbose=verbose,
         )
@@ -119,8 +113,10 @@ class TreeSelectLeafRetriever(BaseRetriever):
         query_bundle: QueryBundle,
         prev_response: Optional[str] = None,
         level: int = 0,
+        source_nodes: Optional[List[BaseNode]] = None,
     ) -> str:
-        """Get response for selected node.
+        """
+        Get response for selected node.
 
         If not leaf node, it will recursively call _query on the child nodes.
         If prev_response is provided, we will update prev_response with the answer.
@@ -131,7 +127,6 @@ class TreeSelectLeafRetriever(BaseRetriever):
         if len(self._index_struct.get_children(selected_node)) == 0:
             response_builder = get_response_synthesizer(
                 llm=self._llm,
-                service_context=self._service_context,
                 text_qa_template=self._text_qa_template,
                 refine_template=self._refine_template,
                 callback_manager=self.callback_manager,
@@ -141,13 +136,16 @@ class TreeSelectLeafRetriever(BaseRetriever):
             cur_response = response_builder.get_response(
                 query_str, [node_text], prev_response=prev_response
             )
-            cur_response = cast(str, cur_response)
+            cur_response = str(cur_response)
+            if source_nodes is not None:
+                source_nodes.append(selected_node)
             logger.debug(f">[Level {level}] Current answer response: {cur_response} ")
         else:
             cur_response = self._query_level(
                 self._index_struct.get_children(selected_node),
                 query_bundle,
                 level=level + 1,
+                source_nodes=source_nodes,
             )
 
         if prev_response is None:
@@ -162,13 +160,14 @@ class TreeSelectLeafRetriever(BaseRetriever):
             )
 
             logger.debug(f">[Level {level}] Current refined response: {cur_response} ")
-            return cur_response
+            return str(cur_response)
 
     def _query_level(
         self,
         cur_node_ids: Dict[int, str],
         query_bundle: QueryBundle,
         level: int = 0,
+        source_nodes: Optional[List[BaseNode]] = None,
     ) -> str:
         """Answer a query recursively."""
         query_str = query_bundle.query_str
@@ -181,7 +180,10 @@ class TreeSelectLeafRetriever(BaseRetriever):
         if len(cur_node_list) == 1:
             logger.debug(f">[Level {level}] Only one node left. Querying node.")
             return self._query_with_selected_node(
-                cur_node_list[0], query_bundle, level=level
+                cur_node_list[0],
+                query_bundle,
+                level=level,
+                source_nodes=source_nodes,
             )
         elif self.child_branch_factor == 1:
             query_template = self.query_template.partial_format(
@@ -190,6 +192,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             text_splitter = self._prompt_helper.get_text_splitter_given_prompt(
                 prompt=query_template,
                 num_chunks=len(cur_node_list),
+                llm=self._llm,
             )
             numbered_node_text = get_numbered_text_from_nodes(
                 cur_node_list, text_splitter=text_splitter
@@ -209,6 +212,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             text_splitter = self._prompt_helper.get_text_splitter_given_prompt(
                 prompt=query_template_multiple,
                 num_chunks=len(cur_node_list),
+                llm=self._llm,
             )
             numbered_node_text = get_numbered_text_from_nodes(
                 cur_node_list, text_splitter=text_splitter
@@ -260,7 +264,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             full_debug_str = (
                 f">[Level {level}] Node "
                 f"[{number}] Summary text: "
-                f"{ selected_node.get_content(metadata_mode=MetadataMode.LLM) }"
+                f"{selected_node.get_content(metadata_mode=MetadataMode.LLM)}"
             )
             logger.debug(full_debug_str)
             if self._verbose:
@@ -270,6 +274,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
                 query_bundle,
                 prev_response=result_response,
                 level=level,
+                source_nodes=source_nodes,
             )
         # result_response should not be None
         return cast(str, result_response)
@@ -281,13 +286,17 @@ class TreeSelectLeafRetriever(BaseRetriever):
         logger.info(info_str)
         if self._verbose:
             print_text(info_str, end="\n")
+        source_nodes: List[BaseNode] = []
         response_str = self._query_level(
             self._index_struct.root_nodes,
             query_bundle,
             level=0,
+            source_nodes=source_nodes,
         ).strip()
-        # TODO: fix source nodes
-        return Response(response_str, source_nodes=[])
+        return Response(
+            response_str,
+            source_nodes=[NodeWithScore(node=node) for node in source_nodes],
+        )
 
     def _select_nodes(
         self,
@@ -304,6 +313,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             text_splitter = self._prompt_helper.get_text_splitter_given_prompt(
                 prompt=query_template,
                 num_chunks=len(cur_node_list),
+                llm=self._llm,
             )
             numbered_node_text = get_numbered_text_from_nodes(
                 cur_node_list, text_splitter=text_splitter
@@ -323,6 +333,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             text_splitter = self._prompt_helper.get_text_splitter_given_prompt(
                 prompt=query_template_multiple,
                 num_chunks=len(cur_node_list),
+                llm=self._llm,
             )
             numbered_node_text = get_numbered_text_from_nodes(
                 cur_node_list, text_splitter=text_splitter
@@ -375,7 +386,7 @@ class TreeSelectLeafRetriever(BaseRetriever):
             full_debug_str = (
                 f">[Level {level}] Node "
                 f"[{number}] Summary text: "
-                f"{ selected_node.get_content(metadata_mode=MetadataMode.LLM) }"
+                f"{selected_node.get_content(metadata_mode=MetadataMode.LLM)}"
             )
             logger.debug(full_debug_str)
             if self._verbose:

@@ -1,7 +1,7 @@
 from typing import Any, List, Optional
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
-from llama_index.core.bridge.pydantic import Field
+from llama_index.core.bridge.pydantic import Field, SerializeAsAny
 from llama_index.core.memory.types import (
     BaseMemory,
 )
@@ -12,7 +12,10 @@ DEFAULT_OUTRO_HISTORY_MESSAGE = "This is the end of the retrieved message dialog
 
 
 class SimpleComposableMemory(BaseMemory):
-    """A simple composition of potentially several memory sources.
+    """
+    Deprecated: Please use `llama_index.core.memory.Memory` instead.
+
+    A simple composition of potentially several memory sources.
 
     This composable memory considers one of the memory sources as the main
     one and the others as secondary. The secondary memory sources get added to
@@ -23,12 +26,13 @@ class SimpleComposableMemory(BaseMemory):
         primary_memory: (BaseMemory) The main memory buffer for agent.
         secondary_memory_sources: (List(BaseMemory)) Secondary memory sources.
             Retrieved messages from these sources get added to the system prompt message.
+
     """
 
-    primary_memory: BaseMemory = Field(
+    primary_memory: SerializeAsAny[BaseMemory] = Field(
         description="Primary memory source for chat agent.",
     )
-    secondary_memory_sources: List[BaseMemory] = Field(
+    secondary_memory_sources: List[SerializeAsAny[BaseMemory]] = Field(
         default_factory=list, description="Secondary memory sources."
     )
 
@@ -42,8 +46,12 @@ class SimpleComposableMemory(BaseMemory):
         cls,
         primary_memory: Optional[BaseMemory] = None,
         secondary_memory_sources: Optional[List[BaseMemory]] = None,
+        **kwargs: Any,
     ) -> "SimpleComposableMemory":
         """Create a simple composable memory from an LLM."""
+        if kwargs:
+            raise ValueError(f"Unexpected kwargs: {kwargs}")
+
         primary_memory = primary_memory or ChatMemoryBuffer.from_defaults()
         secondary_memory_sources = secondary_memory_sources or []
 
@@ -100,6 +108,7 @@ class SimpleComposableMemory(BaseMemory):
 
             # add single_secondary_memory_str to chat_history
             if len(messages) > 0 and messages[0].role == MessageRole.SYSTEM:
+                assert messages[0].content is not None
                 system_message = messages[0].content.split(
                     DEFAULT_INTRO_HISTORY_MESSAGE
                 )[0]
@@ -119,7 +128,8 @@ class SimpleComposableMemory(BaseMemory):
         return messages
 
     def get_all(self) -> List[ChatMessage]:
-        """Get all chat history.
+        """
+        Get all chat history.
 
         Uses primary memory get_all only.
         """
@@ -130,6 +140,12 @@ class SimpleComposableMemory(BaseMemory):
         self.primary_memory.put(message)
         for mem in self.secondary_memory_sources:
             mem.put(message)
+
+    async def aput(self, message: ChatMessage) -> None:
+        """Put chat history."""
+        await self.primary_memory.aput(message)
+        for mem in self.secondary_memory_sources:
+            await mem.aput(message)
 
     def set(self, messages: List[ChatMessage]) -> None:
         """Set chat history."""

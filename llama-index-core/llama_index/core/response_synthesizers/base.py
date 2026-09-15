@@ -1,4 +1,5 @@
-"""Response builder class.
+"""
+Response builder class.
 
 This class provides general functions for taking in a set of text
 and generating a response.
@@ -10,15 +11,18 @@ Will support different modes, from 1) stuffing chunks into prompt,
 
 import logging
 from abc import abstractmethod
-from typing import Any, Dict, Generator, List, Optional, Sequence, AsyncGenerator
-
-from llama_index.core.base.query_pipeline.query import (
-    ChainableMixin,
-    InputKeys,
-    OutputKeys,
-    QueryComponent,
-    validate_and_convert_stringable,
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    List,
+    Optional,
+    Sequence,
+    AsyncGenerator,
+    Type,
 )
+
+from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.base.response.schema import (
     RESPONSE_TYPE,
     PydanticResponse,
@@ -26,11 +30,13 @@ from llama_index.core.base.response.schema import (
     StreamingResponse,
     AsyncStreamingResponse,
 )
-from llama_index.core.bridge.pydantic import BaseModel, Field
+from llama_index.core.bridge.pydantic import BaseModel
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.callbacks.schema import CBEventType, EventPayload
-from llama_index.core.indices.prompt_helper import PromptHelper
+from llama_index.core.indices.prompt_helper import PromptHelper, ChatPromptHelper
+from llama_index.core.llms import LLM
 from llama_index.core.prompts.mixin import PromptMixin
+from llama_index.core.prompts.utils import is_chat_model
 from llama_index.core.schema import (
     BaseNode,
     MetadataMode,
@@ -38,19 +44,14 @@ from llama_index.core.schema import (
     QueryBundle,
     QueryType,
 )
-from llama_index.core.service_context import ServiceContext
-from llama_index.core.service_context_elements.llm_predictor import LLMPredictorType
-from llama_index.core.settings import (
-    Settings,
-    callback_manager_from_settings_or_context,
-    llm_from_settings_or_context,
-)
+from llama_index.core.settings import Settings
 from llama_index.core.types import RESPONSE_TEXT_TYPE
 from llama_index.core.instrumentation import DispatcherSpanMixin
 from llama_index.core.instrumentation.events.synthesis import (
     SynthesizeStartEvent,
     SynthesizeEndEvent,
 )
+from llama_index.core.llms.structured_llm import StructuredLLM
 import llama_index.core.instrumentation as instrument
 
 dispatcher = instrument.get_dispatcher(__name__)
@@ -60,38 +61,35 @@ logger = logging.getLogger(__name__)
 QueryTextType = QueryType
 
 
-def empty_response_generator() -> Generator[str, None, None]:
-    yield "Empty Response"
-
-
-async def empty_response_agenerator() -> AsyncGenerator[str, None]:
-    yield "Empty Response"
-
-
-class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
+class BaseSynthesizer(PromptMixin, DispatcherSpanMixin):
     """Response builder class."""
 
     def __init__(
         self,
-        llm: Optional[LLMPredictorType] = None,
+        llm: Optional[LLM] = None,
         callback_manager: Optional[CallbackManager] = None,
         prompt_helper: Optional[PromptHelper] = None,
+        chat_prompt_helper: Optional[ChatPromptHelper] = None,
         streaming: bool = False,
-        output_cls: BaseModel = None,
-        # deprecated
-        service_context: Optional[ServiceContext] = None,
+        output_cls: Optional[Type[BaseModel]] = None,
+        empty_response: Optional[str] = None,
+        multimodal: bool = False,
     ) -> None:
         """Init params."""
-        self._llm = llm or llm_from_settings_or_context(Settings, service_context)
+        self._llm = llm or Settings.llm
 
         if callback_manager:
             self._llm.callback_manager = callback_manager
 
-        self._callback_manager = (
-            callback_manager
-            or callback_manager_from_settings_or_context(Settings, service_context)
-        )
-
+        self._callback_manager = callback_manager or Settings.callback_manager
+        self._streaming = streaming
+        self._output_cls = output_cls
+        self._empty_response = empty_response or "Empty Response"
+        self._multimodal = multimodal
+        self._prompt_helper: PromptHelper
+        if multimodal:
+            if not is_chat_model(self._llm):
+                raise ValueError("Multimodal synthesis requires a chat LLM.")
         self._prompt_helper = (
             prompt_helper
             or Settings._prompt_helper
@@ -99,9 +97,19 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
                 self._llm.metadata,
             )
         )
+        self._chat_prompt_helper = (
+            chat_prompt_helper
+            or Settings._chat_prompt_helper
+            or ChatPromptHelper.from_llm_metadata(
+                self._llm.metadata,
+            )
+        )
 
-        self._streaming = streaming
-        self._output_cls = output_cls
+    def _empty_response_generator(self) -> Generator[str, None, None]:
+        yield self._empty_response
+
+    async def _empty_response_agenerator(self) -> AsyncGenerator[str, None]:
+        yield self._empty_response
 
     def _get_prompt_modules(self) -> Dict[str, Any]:
         """Get prompt modules."""
@@ -140,6 +148,22 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
         """Get response."""
         ...
 
+    def get_response_from_messages(
+        self,
+        query_str: str,
+        message_chunks: Sequence[ChatMessage],
+        **response_kwargs: Any,
+    ) -> RESPONSE_TEXT_TYPE:
+        raise NotImplementedError
+
+    async def aget_response_from_messages(
+        self,
+        query_str: str,
+        message_chunks: Sequence[ChatMessage],
+        **response_kwargs: Any,
+    ) -> RESPONSE_TEXT_TYPE:
+        raise NotImplementedError
+
     def _log_prompt_and_response(
         self,
         formatted_prompt: str,
@@ -167,6 +191,15 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
             [node_with_score.node for node_with_score in source_nodes]
         )
 
+        if isinstance(self._llm, StructuredLLM):
+            # convert string to output_cls
+            output = self._llm.output_cls.model_validate_json(str(response_str))
+            return PydanticResponse(
+                output,
+                source_nodes=source_nodes,
+                metadata=response_metadata,
+            )
+
         if isinstance(response_str, str):
             return Response(
                 response_str,
@@ -186,7 +219,7 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
                 metadata=response_metadata,
             )
 
-        if isinstance(response_str, self._output_cls):
+        if self._output_cls is not None and isinstance(response_str, self._output_cls):
             return PydanticResponse(
                 response_str, source_nodes=source_nodes, metadata=response_metadata
             )
@@ -211,18 +244,18 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
 
         if len(nodes) == 0:
             if self._streaming:
-                empty_response = StreamingResponse(
-                    response_gen=empty_response_generator()
+                empty_response_stream = StreamingResponse(
+                    response_gen=self._empty_response_generator()
                 )
                 dispatcher.event(
                     SynthesizeEndEvent(
                         query=query,
-                        response=empty_response,
+                        response=empty_response_stream,
                     )
                 )
-                return empty_response
+                return empty_response_stream
             else:
-                empty_response = Response("Empty Response")
+                empty_response = Response(self._empty_response)
                 dispatcher.event(
                     SynthesizeEndEvent(
                         query=query,
@@ -238,13 +271,28 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
             CBEventType.SYNTHESIZE,
             payload={EventPayload.QUERY_STR: query.query_str},
         ) as event:
-            response_str = self.get_response(
-                query_str=query.query_str,
-                text_chunks=[
-                    n.node.get_content(metadata_mode=MetadataMode.LLM) for n in nodes
-                ],
-                **response_kwargs,
-            )
+            if self._multimodal:
+                response_str = self.get_response_from_messages(
+                    query_str=query.query_str,
+                    message_chunks=[
+                        ChatMessage(
+                            blocks=n.node.get_content_blocks(
+                                metadata_mode=MetadataMode.LLM
+                            )
+                        )
+                        for n in nodes
+                    ],
+                    **response_kwargs,
+                )
+            else:
+                response_str = self.get_response(
+                    query_str=query.query_str,
+                    text_chunks=[
+                        n.node.get_content(metadata_mode=MetadataMode.LLM)
+                        for n in nodes
+                    ],
+                    **response_kwargs,
+                )
 
             additional_source_nodes = additional_source_nodes or []
             source_nodes = list(nodes) + list(additional_source_nodes)
@@ -276,18 +324,18 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
         )
         if len(nodes) == 0:
             if self._streaming:
-                empty_response = AsyncStreamingResponse(
-                    response_gen=empty_response_agenerator()
+                empty_response_stream = AsyncStreamingResponse(
+                    response_gen=self._empty_response_agenerator()
                 )
                 dispatcher.event(
                     SynthesizeEndEvent(
                         query=query,
-                        response=empty_response,
+                        response=empty_response_stream,
                     )
                 )
-                return empty_response
+                return empty_response_stream
             else:
-                empty_response = Response("Empty Response")
+                empty_response = Response(self._empty_response)
                 dispatcher.event(
                     SynthesizeEndEvent(
                         query=query,
@@ -303,13 +351,28 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
             CBEventType.SYNTHESIZE,
             payload={EventPayload.QUERY_STR: query.query_str},
         ) as event:
-            response_str = await self.aget_response(
-                query_str=query.query_str,
-                text_chunks=[
-                    n.node.get_content(metadata_mode=MetadataMode.LLM) for n in nodes
-                ],
-                **response_kwargs,
-            )
+            if self._multimodal:
+                response_str = await self.aget_response_from_messages(
+                    query_str=query.query_str,
+                    message_chunks=[
+                        ChatMessage(
+                            blocks=n.node.get_content_blocks(
+                                metadata_mode=MetadataMode.LLM
+                            )
+                        )
+                        for n in nodes
+                    ],
+                    **response_kwargs,
+                )
+            else:
+                response_str = await self.aget_response(
+                    query_str=query.query_str,
+                    text_chunks=[
+                        n.node.get_content(metadata_mode=MetadataMode.LLM)
+                        for n in nodes
+                    ],
+                    **response_kwargs,
+                )
 
             additional_source_nodes = additional_source_nodes or []
             source_nodes = list(nodes) + list(additional_source_nodes)
@@ -325,59 +388,3 @@ class BaseSynthesizer(ChainableMixin, PromptMixin, DispatcherSpanMixin):
             )
         )
         return response
-
-    def _as_query_component(self, **kwargs: Any) -> QueryComponent:
-        """As query component."""
-        return SynthesizerComponent(synthesizer=self)
-
-
-class SynthesizerComponent(QueryComponent):
-    """Synthesizer component."""
-
-    synthesizer: BaseSynthesizer = Field(..., description="Synthesizer")
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def set_callback_manager(self, callback_manager: CallbackManager) -> None:
-        """Set callback manager."""
-        self.synthesizer.callback_manager = callback_manager
-
-    def _validate_component_inputs(self, input: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate component inputs during run_component."""
-        # make sure both query_str and nodes are there
-        if "query_str" not in input:
-            raise ValueError("Input must have key 'query_str'")
-        input["query_str"] = validate_and_convert_stringable(input["query_str"])
-
-        if "nodes" not in input:
-            raise ValueError("Input must have key 'nodes'")
-        nodes = input["nodes"]
-        if not isinstance(nodes, list):
-            raise ValueError("Input nodes must be a list")
-        for node in nodes:
-            if not isinstance(node, NodeWithScore):
-                raise ValueError("Input nodes must be a list of NodeWithScore")
-        return input
-
-    def _run_component(self, **kwargs: Any) -> Dict[str, Any]:
-        """Run component."""
-        output = self.synthesizer.synthesize(kwargs["query_str"], kwargs["nodes"])
-        return {"output": output}
-
-    async def _arun_component(self, **kwargs: Any) -> Dict[str, Any]:
-        """Run component."""
-        output = await self.synthesizer.asynthesize(
-            kwargs["query_str"], kwargs["nodes"]
-        )
-        return {"output": output}
-
-    @property
-    def input_keys(self) -> InputKeys:
-        """Input keys."""
-        return InputKeys.from_keys({"query_str", "nodes"})
-
-    @property
-    def output_keys(self) -> OutputKeys:
-        """Output keys."""
-        return OutputKeys.from_keys({"output"})

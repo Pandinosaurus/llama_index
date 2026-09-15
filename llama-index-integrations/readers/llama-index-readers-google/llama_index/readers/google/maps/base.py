@@ -26,7 +26,7 @@ class Review(BaseModel):
 class Place(BaseModel):
     reviews: List[Review]
     address: str
-    average_rating: int
+    average_rating: float
     display_name: str
     number_of_ratings: int
 
@@ -47,11 +47,13 @@ class GoogleMapsTextSearchReader(BaseReader):
         text: str,
         number_of_results: Optional[int] = DEFAULT_NUMBER_OF_RESULTS,
     ) -> List[Document]:
-        """Load data from Google Maps.
+        """
+        Load data from Google Maps.
 
         Args:
             text (str): the text to search for.
             number_of_results (Optional[int]): the number of results to return. Defaults to 20.
+
         """
         response = self._search_text_request(text, MAX_RESULTS_PER_PAGE)
         documents = []
@@ -62,7 +64,7 @@ class GoogleMapsTextSearchReader(BaseReader):
                 break
             for place in places:
                 formatted_address = place["formattedAddress"]
-                rating = place["rating"]
+                average_rating = place["rating"]
                 display_name = place["displayName"]
                 if isinstance(display_name, dict):
                     display_name = display_name["text"]
@@ -85,7 +87,7 @@ class GoogleMapsTextSearchReader(BaseReader):
                 place = Place(
                     reviews=reviews,
                     address=formatted_address,
-                    average_rating=rating,
+                    average_rating=average_rating,
                     display_name=display_name,
                     number_of_ratings=number_of_ratings,
                 )
@@ -122,6 +124,7 @@ class GoogleMapsTextSearchReader(BaseReader):
             text (str): the text to search for.
             number_of_results (int): the number of results to return.
             next_page_token (Optional[str]): the next page token to get the next page of results.
+
         """
         headers = {
             "Content-Type": "application/json",

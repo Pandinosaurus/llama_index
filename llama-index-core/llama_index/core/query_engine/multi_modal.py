@@ -1,16 +1,19 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
+
+import deprecated
 
 from llama_index.core.base.response.schema import RESPONSE_TYPE, Response
 from llama_index.core.callbacks.base import CallbackManager
 from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from llama_index.core.indices.query.base import BaseQueryEngine
 from llama_index.core.indices.query.schema import QueryBundle, QueryType
-from llama_index.core.multi_modal_llms.base import MultiModalLLM
+from llama_index.core.llms import LLM, TextBlock, ChatMessage, ImageBlock
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.prompts import BasePromptTemplate
 from llama_index.core.prompts.default_prompts import DEFAULT_TEXT_QA_PROMPT
 from llama_index.core.prompts.mixin import PromptMixinType
 from llama_index.core.schema import ImageNode, NodeWithScore, MetadataMode
+from llama_index.core.base.llms.generic_utils import image_node_to_image_block
 
 if TYPE_CHECKING:
     from llama_index.core.indices.multi_modal import MultiModalVectorIndexRetriever
@@ -29,24 +32,43 @@ def _get_image_and_text_nodes(
     return image_nodes, text_nodes
 
 
+@deprecated.deprecated(
+    version="0.14.23",
+    reason=(
+        "SimpleMultiModalQueryEngine is deprecated. Multimodal synthesis is now "
+        "available on the standard engines via `multimodal=True`. Use "
+        "`RetrieverQueryEngine.from_args(retriever=..., llm=..., multimodal=True)` "
+        "(or `CitationQueryEngine.from_args(..., multimodal=True)` for cited "
+        "responses) with a chat LLM that supports multimodal content blocks. "
+        "Migration notes: pass your multimodal model via `llm=` instead of "
+        "`multi_modal_llm=`; replace the separate `text_qa_template` and "
+        "`image_qa_template` with a single `chat_content_qa_template` (and "
+        "optional `chat_content_refine_template`) — a `RichPromptTemplate` that "
+        "iterates over `context_messages[].blocks` and emits each block by type "
+        "(see `CHAT_CONTENT_QA_PROMPT` in `llama_index.core.prompts.chat_prompts` "
+        "for the default)."
+    ),
+)
 class SimpleMultiModalQueryEngine(BaseQueryEngine):
-    """Simple Multi Modal Retriever query engine.
+    """
+    Simple Multi Modal Retriever query engine.
 
     Assumes that retrieved text context fits within context window of LLM, along with images.
 
     Args:
         retriever (MultiModalVectorIndexRetriever): A retriever object.
-        multi_modal_llm (Optional[MultiModalLLM]): MultiModalLLM Models.
+        multi_modal_llm (Optional[LLM]): An LLM model.
         text_qa_template (Optional[BasePromptTemplate]): Text QA Prompt Template.
         image_qa_template (Optional[BasePromptTemplate]): Image QA Prompt Template.
         node_postprocessors (Optional[List[BaseNodePostprocessor]]): Node Postprocessors.
         callback_manager (Optional[CallbackManager]): A callback manager.
+
     """
 
     def __init__(
         self,
         retriever: "MultiModalVectorIndexRetriever",
-        multi_modal_llm: Optional[MultiModalLLM] = None,
+        multi_modal_llm: Optional[LLM] = None,
         text_qa_template: Optional[BasePromptTemplate] = None,
         image_qa_template: Optional[BasePromptTemplate] = None,
         node_postprocessors: Optional[List[BaseNodePostprocessor]] = None,
@@ -58,17 +80,17 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
             self._multi_modal_llm = multi_modal_llm
         else:
             try:
-                from llama_index.multi_modal_llms.openai import (
-                    OpenAIMultiModal,
+                from llama_index.llms.openai import (
+                    OpenAIResponses,
                 )  # pants: no-infer-dep
 
-                self._multi_modal_llm = OpenAIMultiModal(
-                    model="gpt-4-vision-preview", max_new_tokens=1000
+                self._multi_modal_llm = OpenAIResponses(
+                    model="gpt-4.1", max_output_tokens=1000
                 )
             except ImportError as e:
                 raise ImportError(
-                    "`llama-index-multi-modal-llms-openai` package cannot be found. "
-                    "Please install it by using `pip install `llama-index-multi-modal-llms-openai`"
+                    "`llama-index-llms-openai` package cannot be found. "
+                    "Please install it by using `pip install `llama-index-llms-openai`"
                 )
         self._text_qa_template = text_qa_template or DEFAULT_TEXT_QA_PROMPT
         self._image_qa_template = image_qa_template or DEFAULT_TEXT_QA_PROMPT
@@ -97,13 +119,24 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
             )
         return nodes
 
+    async def _async_apply_node_postprocessors(
+        self, nodes: List[NodeWithScore], query_bundle: QueryBundle
+    ) -> List[NodeWithScore]:
+        for node_postprocessor in self._node_postprocessors:
+            nodes = await node_postprocessor.apostprocess_nodes(
+                nodes, query_bundle=query_bundle
+            )
+        return nodes
+
     def retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         nodes = self._retriever.retrieve(query_bundle)
         return self._apply_node_postprocessors(nodes, query_bundle=query_bundle)
 
     async def aretrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         nodes = await self._retriever.aretrieve(query_bundle)
-        return self._apply_node_postprocessors(nodes, query_bundle=query_bundle)
+        return await self._async_apply_node_postprocessors(
+            nodes, query_bundle=query_bundle
+        )
 
     def synthesize(
         self,
@@ -119,12 +152,19 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
             context_str=context_str, query_str=query_bundle.query_str
         )
 
-        llm_response = self._multi_modal_llm.complete(
-            prompt=fmt_prompt,
-            image_documents=[image_node.node for image_node in image_nodes],
+        blocks: List[Union[ImageBlock, TextBlock]] = [
+            image_node_to_image_block(image_node.node)
+            for image_node in image_nodes
+            if isinstance(image_node.node, ImageNode)
+        ]
+
+        blocks.append(TextBlock(text=fmt_prompt))
+
+        llm_response = self._multi_modal_llm.chat(
+            [ChatMessage(role="user", blocks=blocks)]
         )
         return Response(
-            response=str(llm_response),
+            response=llm_response.message.content,
             source_nodes=nodes,
             metadata={"text_nodes": text_nodes, "image_nodes": image_nodes},
         )
@@ -132,18 +172,27 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
     def _get_response_with_images(
         self,
         prompt_str: str,
-        image_nodes: List[ImageNode],
+        image_nodes: List[NodeWithScore],
     ) -> RESPONSE_TYPE:
+        assert all(isinstance(node.node, ImageNode) for node in image_nodes)
+
         fmt_prompt = self._image_qa_template.format(
             query_str=prompt_str,
         )
 
-        llm_response = self._multi_modal_llm.complete(
-            prompt=fmt_prompt,
-            image_documents=[image_node.node for image_node in image_nodes],
+        blocks: List[Union[ImageBlock, TextBlock]] = [
+            image_node_to_image_block(image_node.node)
+            for image_node in image_nodes
+            if isinstance(image_node.node, ImageNode)
+        ]
+
+        blocks.append(TextBlock(text=fmt_prompt))
+
+        llm_response = self._multi_modal_llm.chat(
+            [ChatMessage(role="user", blocks=blocks)]
         )
         return Response(
-            response=str(llm_response),
+            response=llm_response.message.content,
             source_nodes=image_nodes,
             metadata={"image_nodes": image_nodes},
         )
@@ -161,12 +210,20 @@ class SimpleMultiModalQueryEngine(BaseQueryEngine):
         fmt_prompt = self._text_qa_template.format(
             context_str=context_str, query_str=query_bundle.query_str
         )
-        llm_response = await self._multi_modal_llm.acomplete(
-            prompt=fmt_prompt,
-            image_documents=[image_node.node for image_node in image_nodes],
+
+        blocks: List[Union[ImageBlock, TextBlock]] = [
+            image_node_to_image_block(image_node.node)
+            for image_node in image_nodes
+            if isinstance(image_node.node, ImageNode)
+        ]
+
+        blocks.append(TextBlock(text=fmt_prompt))
+
+        llm_response = await self._multi_modal_llm.achat(
+            [ChatMessage(role="user", blocks=blocks)]
         )
         return Response(
-            response=str(llm_response),
+            response=llm_response.message.content,
             source_nodes=nodes,
             metadata={"text_nodes": text_nodes, "image_nodes": image_nodes},
         )

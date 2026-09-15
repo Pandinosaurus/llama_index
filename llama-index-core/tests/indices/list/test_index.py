@@ -1,20 +1,16 @@
 """Test summary index."""
 
-from typing import List
+from typing import Any, List
 
+import pytest
 from llama_index.core.base.base_retriever import BaseRetriever
 from llama_index.core.indices.list.base import ListRetrieverMode, SummaryIndex
 from llama_index.core.schema import Document
-from llama_index.core.service_context import ServiceContext
 
 
-def test_build_list(
-    documents: List[Document], mock_service_context: ServiceContext
-) -> None:
+def test_build_list(documents: List[Document], patch_token_text_splitter) -> None:
     """Test build list."""
-    summary_index = SummaryIndex.from_documents(
-        documents, service_context=mock_service_context
-    )
+    summary_index = SummaryIndex.from_documents(documents)
     assert len(summary_index.index_struct.nodes) == 4
     # check contents of nodes
     node_ids = summary_index.index_struct.nodes
@@ -25,10 +21,7 @@ def test_build_list(
     assert nodes[3].get_content() == "This is a test v2."
 
 
-def test_refresh_list(
-    documents: List[Document],
-    mock_service_context: ServiceContext,
-) -> None:
+def test_refresh_list(documents: List[Document]) -> None:
     """Test build list."""
     # add extra document
     more_documents = [*documents, Document(text="Test document 2")]
@@ -38,9 +31,7 @@ def test_refresh_list(
         more_documents[i].doc_id = str(i)  # type: ignore[misc]
 
     # create index
-    summary_index = SummaryIndex.from_documents(
-        more_documents, service_context=mock_service_context
-    )
+    summary_index = SummaryIndex.from_documents(more_documents)
 
     # check that no documents are refreshed
     refreshed_docs = summary_index.refresh_ref_docs(more_documents)
@@ -61,15 +52,105 @@ def test_refresh_list(
     assert test_node.get_content() == "Test document 2, now with changes!"
 
 
-def test_build_list_multiple(mock_service_context: ServiceContext) -> None:
+def test_refresh_ref_docs_applies_insert_kwargs_to_every_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Insert kwargs should not be consumed by the first inserted document."""
+    summary_index = SummaryIndex([])
+    documents = [Document(id_="1", text="One"), Document(id_="2", text="Two")]
+    insert_kwargs = {"foo": "bar"}
+    captured_kwargs: List[dict[str, Any]] = []
+
+    def mock_insert(document: Document, **kwargs: Any) -> None:
+        captured_kwargs.append(kwargs)
+
+    monkeypatch.setattr(summary_index, "insert", mock_insert)
+
+    refreshed_docs = summary_index.refresh_ref_docs(
+        documents, insert_kwargs=insert_kwargs
+    )
+
+    assert refreshed_docs == [True, True]
+    assert captured_kwargs == [insert_kwargs, insert_kwargs]
+
+
+def test_refresh_ref_docs_applies_update_kwargs_to_every_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Update kwargs should not be consumed by the first updated document."""
+    old_documents = [Document(id_="1", text="One"), Document(id_="2", text="Two")]
+    summary_index = SummaryIndex.from_documents(old_documents)
+    new_documents = [Document(id_="1", text="One v2"), Document(id_="2", text="Two v2")]
+    update_kwargs = {"delete_kwargs": {"delete_from_docstore": True}}
+    captured_kwargs: List[dict[str, Any]] = []
+
+    def mock_update_ref_doc(document: Document, **kwargs: Any) -> None:
+        captured_kwargs.append(kwargs)
+
+    monkeypatch.setattr(summary_index, "update_ref_doc", mock_update_ref_doc)
+
+    refreshed_docs = summary_index.refresh_ref_docs(
+        new_documents, update_kwargs=update_kwargs
+    )
+
+    assert refreshed_docs == [True, True]
+    assert captured_kwargs == [update_kwargs, update_kwargs]
+
+
+@pytest.mark.asyncio
+async def test_arefresh_ref_docs_applies_insert_kwargs_to_every_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async insert kwargs should not be consumed by the first inserted document."""
+    summary_index = SummaryIndex([])
+    documents = [Document(id_="1", text="One"), Document(id_="2", text="Two")]
+    insert_kwargs = {"foo": "bar"}
+    captured_kwargs: List[dict[str, Any]] = []
+
+    async def mock_ainsert(document: Document, **kwargs: Any) -> None:
+        captured_kwargs.append(kwargs)
+
+    monkeypatch.setattr(summary_index, "ainsert", mock_ainsert)
+
+    refreshed_docs = await summary_index.arefresh_ref_docs(
+        documents, insert_kwargs=insert_kwargs
+    )
+
+    assert refreshed_docs == [True, True]
+    assert captured_kwargs == [insert_kwargs, insert_kwargs]
+
+
+@pytest.mark.asyncio
+async def test_arefresh_ref_docs_applies_update_kwargs_to_every_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async update kwargs should not be consumed by the first updated document."""
+    old_documents = [Document(id_="1", text="One"), Document(id_="2", text="Two")]
+    summary_index = SummaryIndex.from_documents(old_documents)
+    new_documents = [Document(id_="1", text="One v2"), Document(id_="2", text="Two v2")]
+    update_kwargs = {"delete_kwargs": {"delete_from_docstore": True}}
+    captured_kwargs: List[dict[str, Any]] = []
+
+    async def mock_aupdate_ref_doc(document: Document, **kwargs: Any) -> None:
+        captured_kwargs.append(kwargs)
+
+    monkeypatch.setattr(summary_index, "aupdate_ref_doc", mock_aupdate_ref_doc)
+
+    refreshed_docs = await summary_index.arefresh_ref_docs(
+        new_documents, update_kwargs=update_kwargs
+    )
+
+    assert refreshed_docs == [True, True]
+    assert captured_kwargs == [update_kwargs, update_kwargs]
+
+
+def test_build_list_multiple(patch_token_text_splitter) -> None:
     """Test build list multiple."""
     documents = [
         Document(text="Hello world.\nThis is a test."),
         Document(text="This is another test.\nThis is a test v2."),
     ]
-    summary_index = SummaryIndex.from_documents(
-        documents, service_context=mock_service_context
-    )
+    summary_index = SummaryIndex.from_documents(documents)
     assert len(summary_index.index_struct.nodes) == 4
     nodes = summary_index.docstore.get_nodes(summary_index.index_struct.nodes)
     # check contents of nodes
@@ -79,12 +160,9 @@ def test_build_list_multiple(mock_service_context: ServiceContext) -> None:
     assert nodes[3].get_content() == "This is a test v2."
 
 
-def test_list_insert(
-    documents: List[Document],
-    mock_service_context: ServiceContext,
-) -> None:
+def test_list_insert(documents: List[Document], patch_token_text_splitter) -> None:
     """Test insert to list."""
-    summary_index = SummaryIndex([], service_context=mock_service_context)
+    summary_index = SummaryIndex([])
     assert len(summary_index.index_struct.nodes) == 0
     summary_index.insert(documents[0])
     nodes = summary_index.docstore.get_nodes(summary_index.index_struct.nodes)
@@ -106,10 +184,7 @@ def test_list_insert(
         assert node.ref_doc_id == "test_id"
 
 
-def test_list_delete(
-    documents: List[Document],
-    mock_service_context: ServiceContext,
-) -> None:
+def test_list_delete(documents: List[Document], patch_token_text_splitter) -> None:
     """Test insert to list and then delete."""
     new_documents = [
         Document(text="Hello world.\nThis is a test.", id_="test_id_1"),
@@ -117,9 +192,7 @@ def test_list_delete(
         Document(text="This is a test v2.", id_="test_id_3"),
     ]
 
-    summary_index = SummaryIndex.from_documents(
-        new_documents, service_context=mock_service_context
-    )
+    summary_index = SummaryIndex.from_documents(new_documents)
 
     # test ref doc info for three docs
     all_ref_doc_info = summary_index.ref_doc_info
@@ -138,9 +211,7 @@ def test_list_delete(
     source_doc = summary_index.docstore.get_document("test_id_1", raise_error=False)
     assert source_doc is None
 
-    summary_index = SummaryIndex.from_documents(
-        new_documents, service_context=mock_service_context
-    )
+    summary_index = SummaryIndex.from_documents(new_documents)
     summary_index.delete_ref_doc("test_id_2")
     assert len(summary_index.index_struct.nodes) == 3
     nodes = summary_index.docstore.get_nodes(summary_index.index_struct.nodes)
@@ -152,13 +223,8 @@ def test_list_delete(
     assert nodes[2].get_content() == "This is a test v2."
 
 
-def test_as_retriever(
-    documents: List[Document],
-    mock_service_context: ServiceContext,
-) -> None:
-    summary_index = SummaryIndex.from_documents(
-        documents, service_context=mock_service_context
-    )
+def test_as_retriever(documents: List[Document]) -> None:
+    summary_index = SummaryIndex.from_documents(documents)
     default_retriever = summary_index.as_retriever(
         retriever_mode=ListRetrieverMode.DEFAULT
     )

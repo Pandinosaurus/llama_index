@@ -15,17 +15,16 @@ EmbedType = Union[BaseEmbedding, "LCEmbeddings", str]
 
 def save_embedding(embedding: List[float], file_path: str) -> None:
     """Save embedding to file."""
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(",".join([str(x) for x in embedding]))
 
 
 def load_embedding(file_path: str) -> List[float]:
     """Load embedding from file. Will only return first embedding in file."""
-    with open(file_path) as f:
+    with open(file_path, encoding="utf-8") as f:
         for line in f:
-            embedding = [float(x) for x in line.strip().split(",")]
-            break
-        return embedding
+            return [float(x) for x in line.strip().split(",")]
+    raise ValueError(f"The embedding file {file_path} is empty.")
 
 
 def resolve_embed_model(
@@ -56,7 +55,7 @@ def resolve_embed_model(
             )  # pants: no-infer-dep
 
             embed_model = OpenAIEmbedding()
-            validate_openai_api_key(embed_model.api_key)
+            validate_openai_api_key(embed_model.api_key)  # type: ignore
         except ImportError:
             raise ImportError(
                 "`llama-index-embeddings-openai` package not found, "
@@ -71,8 +70,8 @@ def resolve_embed_model(
                 f"{e!s}"
                 "\nConsider using embed_model='local'.\n"
                 "Visit our documentation for more embedding options: "
-                "https://docs.llamaindex.ai/en/stable/module_guides/models/"
-                "embeddings.html#modules"
+                "https://developers.llamaindex.ai/python/framework/module_guides/"
+                "models/embeddings/"
                 "\n******"
             )
     # for image multi-modal embeddings
@@ -132,6 +131,8 @@ def resolve_embed_model(
     if embed_model is None:
         print("Embeddings have been explicitly disabled. Using MockEmbedding.")
         embed_model = MockEmbedding(embed_dim=1)
+
+    assert isinstance(embed_model, BaseEmbedding)
 
     embed_model.callback_manager = callback_manager or Settings.callback_manager
 

@@ -11,6 +11,46 @@ from llama_index.core.utils import concat_dirs
 
 DEFAULT_PERSIST_FNAME = "object_node_mapping.pickle"
 
+# Classes allowed during deserialization of object node mappings.
+# Restricting unpickling to this set prevents arbitrary code execution
+# via crafted pickle payloads placed in the persist directory (CWE-502).
+_SAFE_PICKLE_CLASSES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("builtins", "dict"),
+        ("builtins", "list"),
+        ("builtins", "set"),
+        ("builtins", "frozenset"),
+        ("builtins", "tuple"),
+        ("builtins", "str"),
+        ("builtins", "bytes"),
+        ("builtins", "int"),
+        ("builtins", "float"),
+        ("builtins", "complex"),
+        ("builtins", "bool"),
+        ("builtins", "NoneType"),
+        (__name__, "SimpleObjectNodeMapping"),
+    }
+)
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """
+    Unpickler that restricts class instantiation to an allowlist.
+
+    Prevents arbitrary code execution when loading from untrusted or
+    user-configurable persist directories.
+    """
+
+    def find_class(self, module: str, name: str) -> type:
+        if (module, name) in _SAFE_PICKLE_CLASSES:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(
+            f"Refusing to unpickle '{module}.{name}': class not in allowlist. "
+            f"If you need to load custom object types, use a purpose-built "
+            f"serialization format instead of pickle."
+        )
+
+
 OT = TypeVar("OT")
 
 
@@ -22,7 +62,8 @@ class BaseObjectNodeMapping(Generic[OT]):
     def from_objects(
         cls, objs: Sequence[OT], *args: Any, **kwargs: Any
     ) -> "BaseObjectNodeMapping":
-        """Initialize node mapping from a list of objects.
+        """
+        Initialize node mapping from a list of objects.
 
         Only needs to be specified if the node mapping
         needs to be initialized with a list of objects.
@@ -33,7 +74,8 @@ class BaseObjectNodeMapping(Generic[OT]):
         """Validate object."""
 
     def add_object(self, obj: OT) -> None:
-        """Add object.
+        """
+        Add object.
 
         Only needs to be specified if the node mapping
         needs to be initialized with a list of objects.
@@ -49,7 +91,8 @@ class BaseObjectNodeMapping(Generic[OT]):
 
     @abstractmethod
     def _add_object(self, obj: OT) -> None:
-        """Add object.
+        """
+        Add object.
 
         Only needs to be specified if the node mapping
         needs to be initialized with a list of objects.
@@ -57,10 +100,10 @@ class BaseObjectNodeMapping(Generic[OT]):
         """
 
     @abstractmethod
-    def to_node(self, obj: OT) -> TextNode:
+    def to_node(self, obj: OT) -> BaseNode:
         """To node."""
 
-    def to_nodes(self, objs: Sequence[OT]) -> Sequence[TextNode]:
+    def to_nodes(self, objs: Sequence[OT]) -> Sequence[BaseNode]:
         return [self.to_node(obj) for obj in objs]
 
     def from_node(self, node: BaseNode) -> OT:
@@ -90,7 +133,7 @@ class BaseObjectNodeMapping(Generic[OT]):
         """Load from serialization."""
         obj_node_mapping = None
         errors = []
-        for cls in BaseObjectNodeMapping.__subclasses__():  # type: ignore[misc]
+        for cls in BaseObjectNodeMapping.__subclasses__():  # type: ignore
             try:
                 obj_node_mapping = cls.from_persist_dir(
                     persist_dir=persist_dir,
@@ -107,7 +150,8 @@ class BaseObjectNodeMapping(Generic[OT]):
 
 
 class SimpleObjectNodeMapping(BaseObjectNodeMapping[Any]):
-    """General node mapping that works for any obj.
+    """
+    General node mapping that works for any obj.
 
     More specifically, any object with a meaningful string representation.
 
@@ -147,7 +191,8 @@ class SimpleObjectNodeMapping(BaseObjectNodeMapping[Any]):
         persist_dir: str = DEFAULT_PERSIST_DIR,
         obj_node_mapping_fname: str = DEFAULT_PERSIST_FNAME,
     ) -> None:
-        """Persist object node mapping.
+        """
+        Persist object node mapping.
 
         NOTE: This may fail depending on whether the object types are
         pickle-able.
@@ -170,7 +215,7 @@ class SimpleObjectNodeMapping(BaseObjectNodeMapping[Any]):
         obj_node_mapping_path = concat_dirs(persist_dir, obj_node_mapping_fname)
         try:
             with open(obj_node_mapping_path, "rb") as f:
-                simple_object_node_mapping = pickle.load(f)
+                simple_object_node_mapping = _RestrictedUnpickler(f).load()
         except pickle.PickleError as err:
             raise ValueError("Objs cannot be loaded.") from err
         return simple_object_node_mapping

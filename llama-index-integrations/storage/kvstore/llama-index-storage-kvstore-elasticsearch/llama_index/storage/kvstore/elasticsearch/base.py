@@ -9,7 +9,7 @@ from llama_index.core.storage.kvstore.types import (
 import asyncio
 import nest_asyncio
 import elasticsearch
-from elasticsearch.helpers import async_bulk
+from elasticsearch.helpers import async_bulk, async_scan
 
 
 logger = getLogger(__name__)
@@ -27,7 +27,8 @@ def _get_elasticsearch_client(
     username: Optional[str] = None,
     password: Optional[str] = None,
 ) -> elasticsearch.AsyncElasticsearch:
-    """Get AsyncElasticsearch client.
+    """
+    Get AsyncElasticsearch client.
 
     Args:
         es_url: Elasticsearch URL.
@@ -41,6 +42,7 @@ def _get_elasticsearch_client(
 
     Raises:
         ConnectionError: If Elasticsearch client cannot connect to Elasticsearch.
+
     """
     if es_url and cloud_id:
         raise ValueError(
@@ -76,7 +78,8 @@ def _get_elasticsearch_client(
 
 
 class ElasticsearchKVStore(BaseKVStore):
-    """Elasticsearch Key-Value store.
+    """
+    Elasticsearch Key-Value store.
 
     Args:
         index_name: Name of the Elasticsearch index.
@@ -148,10 +151,12 @@ class ElasticsearchKVStore(BaseKVStore):
         return "llama_index-py-vs"
 
     async def _create_index_if_not_exists(self, index_name: str) -> None:
-        """Create the AsyncElasticsearch index if it doesn't already exist.
+        """
+        Create the AsyncElasticsearch index if it doesn't already exist.
 
         Args:
             index_name: Name of the AsyncElasticsearch index to create.
+
         """
         if await self.client.indices.exists(index=index_name):
             logger.debug(f"Index {index_name} already exists. Skipping creation.")
@@ -170,7 +175,8 @@ class ElasticsearchKVStore(BaseKVStore):
         val: dict,
         collection: str = DEFAULT_COLLECTION,
     ) -> None:
-        """Put a key-value pair into the store.
+        """
+        Put a key-value pair into the store.
 
         Args:
             key (str): key
@@ -186,7 +192,8 @@ class ElasticsearchKVStore(BaseKVStore):
         val: dict,
         collection: str = DEFAULT_COLLECTION,
     ) -> None:
-        """Put a key-value pair into the store.
+        """
+        Put a key-value pair into the store.
 
         Args:
             key (str): key
@@ -236,18 +243,21 @@ class ElasticsearchKVStore(BaseKVStore):
             await async_bulk(self.client, requests, chunk_size=batch_size, refresh=True)
 
     def get(self, key: str, collection: str = DEFAULT_COLLECTION) -> Optional[dict]:
-        """Get a value from the store.
+        """
+        Get a value from the store.
 
         Args:
             key (str): key
             collection (str): collection name
+
         """
         return asyncio.get_event_loop().run_until_complete(self.aget(key, collection))
 
     async def aget(
         self, key: str, collection: str = DEFAULT_COLLECTION
     ) -> Optional[dict]:
-        """Get a value from the store.
+        """
+        Get a value from the store.
 
         Args:
             key (str): key
@@ -263,7 +273,8 @@ class ElasticsearchKVStore(BaseKVStore):
             return None
 
     def get_all(self, collection: str = DEFAULT_COLLECTION) -> Dict[str, dict]:
-        """Get all values from the store.
+        """
+        Get all values from the store.
 
         Args:
             collection (str): collection name
@@ -272,7 +283,8 @@ class ElasticsearchKVStore(BaseKVStore):
         return asyncio.get_event_loop().run_until_complete(self.aget_all(collection))
 
     async def aget_all(self, collection: str = DEFAULT_COLLECTION) -> Dict[str, dict]:
-        """Get all values from the store.
+        """
+        Get all values from the store.
 
         Args:
             collection (str): collection name
@@ -280,17 +292,17 @@ class ElasticsearchKVStore(BaseKVStore):
         """
         await self._create_index_if_not_exists(collection)
 
-        q = {"query": {"match_all": {}}}
-        response = await self._client.search(index=collection, body=q, source=True)
         result = {}
-        for r in response["hits"]["hits"]:
-            doc_id = r["_id"]
-            content = r["_source"]
+        q = {"query": {"match_all": {}}}
+        async for doc in async_scan(client=self._client, index=collection, query=q):
+            doc_id = doc["_id"]
+            content = doc["_source"]
             result[doc_id] = content
         return result
 
     def delete(self, key: str, collection: str = DEFAULT_COLLECTION) -> bool:
-        """Delete a value from the store.
+        """
+        Delete a value from the store.
 
         Args:
             key (str): key
@@ -302,7 +314,8 @@ class ElasticsearchKVStore(BaseKVStore):
         )
 
     async def adelete(self, key: str, collection: str = DEFAULT_COLLECTION) -> bool:
-        """Delete a value from the store.
+        """
+        Delete a value from the store.
 
         Args:
             key (str): key

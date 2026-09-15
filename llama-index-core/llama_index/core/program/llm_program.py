@@ -1,14 +1,29 @@
-from typing import Any, Dict, Optional, Type, cast
+import logging
+from typing import (
+    Any,
+    Dict,
+    Generator,
+    Optional,
+    Type,
+    cast,
+    AsyncGenerator,
+    Union,
+    List,
+)
 
-from llama_index.core.bridge.pydantic import BaseModel
+from llama_index.core.base.llms.types import CompletionResponse, ChatResponse
 from llama_index.core.llms.llm import LLM
 from llama_index.core.output_parsers.pydantic import PydanticOutputParser
+from llama_index.core.program.utils import FlexibleModel, process_streaming_objects
 from llama_index.core.prompts.base import BasePromptTemplate, PromptTemplate
 from llama_index.core.settings import Settings
-from llama_index.core.types import BaseOutputParser, BasePydanticProgram
+from llama_index.core.types import BaseOutputParser, BasePydanticProgram, Model
 
 
-class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
+_logger = logging.getLogger(__name__)
+
+
+class LLMTextCompletionProgram(BasePydanticProgram[Model]):
     """
     LLM Text Completion Program.
 
@@ -19,7 +34,7 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
     def __init__(
         self,
         output_parser: BaseOutputParser,
-        output_cls: Type[BaseModel],
+        output_cls: Type[Model],
         prompt: BasePromptTemplate,
         llm: LLM,
         verbose: bool = False,
@@ -36,13 +51,13 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
     def from_defaults(
         cls,
         output_parser: Optional[BaseOutputParser] = None,
-        output_cls: Optional[Type[BaseModel]] = None,
+        output_cls: Optional[Type[Model]] = None,
         prompt_template_str: Optional[str] = None,
-        prompt: Optional[PromptTemplate] = None,
+        prompt: Optional[BasePromptTemplate] = None,
         llm: Optional[LLM] = None,
         verbose: bool = False,
         **kwargs: Any,
-    ) -> "LLMTextCompletionProgram":
+    ) -> "LLMTextCompletionProgram[Model]":
         llm = llm or Settings.llm
         if prompt is None and prompt_template_str is None:
             raise ValueError("Must provide either prompt or prompt_template_str.")
@@ -69,7 +84,7 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
         )
 
     @property
-    def output_cls(self) -> Type[BaseModel]:
+    def output_cls(self) -> Type[Model]:
         return self._output_cls
 
     @property
@@ -85,14 +100,14 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
         llm_kwargs: Optional[Dict[str, Any]] = None,
         *args: Any,
         **kwargs: Any,
-    ) -> BaseModel:
+    ) -> Model:
         llm_kwargs = llm_kwargs or {}
         if self._llm.metadata.is_chat_model:
             messages = self._prompt.format_messages(llm=self._llm, **kwargs)
             messages = self._llm._extend_messages(messages)
-            response = self._llm.chat(messages, **llm_kwargs)
+            chat_response = self._llm.chat(messages, **llm_kwargs)
 
-            raw_output = response.message.content or ""
+            raw_output = chat_response.message.content or ""
         else:
             formatted_prompt = self._prompt.format(llm=self._llm, **kwargs)
 
@@ -112,14 +127,14 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
         llm_kwargs: Optional[Dict[str, Any]] = None,
         *args: Any,
         **kwargs: Any,
-    ) -> BaseModel:
+    ) -> Model:
         llm_kwargs = llm_kwargs or {}
         if self._llm.metadata.is_chat_model:
             messages = self._prompt.format_messages(llm=self._llm, **kwargs)
             messages = self._llm._extend_messages(messages)
-            response = await self._llm.achat(messages, **llm_kwargs)
+            chat_response = await self._llm.achat(messages, **llm_kwargs)
 
-            raw_output = response.message.content or ""
+            raw_output = chat_response.message.content or ""
         else:
             formatted_prompt = self._prompt.format(llm=self._llm, **kwargs)
 
@@ -133,3 +148,83 @@ class LLMTextCompletionProgram(BasePydanticProgram[BaseModel]):
                 f"Output parser returned {type(output)} but expected {self._output_cls}"
             )
         return output
+
+    def stream_call(
+        self, *args: Any, llm_kwargs: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> Generator[
+        Union[Model, List[Model], FlexibleModel, List[FlexibleModel]], None, None
+    ]:
+        """
+        Stream object.
+
+        Returns a generator returning partials of the same object
+        or a list of objects until it returns.
+        """
+        response_gen: Generator[CompletionResponse | ChatResponse, None, None]
+        llm_kwargs = llm_kwargs or {}
+        if self._llm.metadata.is_chat_model:
+            messages = self._prompt.format_messages(llm=self._llm, **kwargs)
+            messages = self._llm._extend_messages(messages)
+            response_gen = self._llm.stream_chat(messages, **llm_kwargs)
+        else:
+            formatted_prompt = self._prompt.format(llm=self._llm, **kwargs)
+            response_gen = self._llm.stream_complete(formatted_prompt, **llm_kwargs)
+        cur_objects = None
+        for partial_resp in response_gen:
+            try:
+                objects = process_streaming_objects(
+                    partial_resp,
+                    self._output_cls,
+                    cur_objects=cur_objects,
+                    flexible_mode=True,
+                    llm=self._llm,
+                )
+                cur_objects = objects if isinstance(objects, list) else [objects]
+                yield objects
+            except Exception as e:
+                _logger.warning(f"Failed to parse streaming response: {e}")
+                continue
+
+    async def astream_call(
+        self, *args: Any, llm_kwargs: Optional[Dict[str, Any]] = None, **kwargs: Any
+    ) -> AsyncGenerator[
+        Union[Model, List[Model], FlexibleModel, List[FlexibleModel]], None
+    ]:
+        """
+        Stream objects.
+
+        Returns a generator returning partials of the same object
+        or a list of objects until it returns.
+        """
+        response_gen: AsyncGenerator[CompletionResponse | ChatResponse, None]
+        llm_kwargs = llm_kwargs or {}
+        if self._llm.metadata.is_chat_model:
+            messages = self._prompt.format_messages(llm=self._llm, **kwargs)
+            messages = self._llm._extend_messages(messages)
+            response_gen = await self._llm.astream_chat(messages, **llm_kwargs)
+        else:
+            formatted_prompt = self._prompt.format(llm=self._llm, **kwargs)
+            response_gen = await self._llm.astream_complete(
+                formatted_prompt, **llm_kwargs
+            )
+
+        async def gen() -> AsyncGenerator[
+            Union[Model, List[Model], FlexibleModel, List[FlexibleModel]], None
+        ]:
+            cur_objects = None
+            async for partial_resp in response_gen:
+                try:
+                    objects = process_streaming_objects(
+                        partial_resp,
+                        self._output_cls,
+                        cur_objects=cur_objects,
+                        flexible_mode=True,
+                        llm=self._llm,
+                    )
+                    cur_objects = objects if isinstance(objects, list) else [objects]
+                    yield objects
+                except Exception as e:
+                    _logger.warning(f"Failed to parse streaming response: {e}")
+                    continue
+
+        return gen()

@@ -1,10 +1,17 @@
-"""Init file of LlamaIndex."""
-
-__version__ = "0.10.54"
+"""Top-level imports for LlamaIndex."""
 
 import logging
+from importlib.metadata import PackageNotFoundError, version
 from logging import NullHandler
 from typing import Callable, Optional
+
+try:
+    __version__ = version("llama-index-core")
+except PackageNotFoundError:
+    # This might happen when running tests or scripts directly without
+    # an editable install.
+    __version__ = "0.0.0"
+
 
 # response
 from llama_index.core.base.response.schema import Response
@@ -28,8 +35,8 @@ from llama_index.core.indices import (
     GPTVectorStoreIndex,
     KeywordTableIndex,
     KnowledgeGraphIndex,
-    PropertyGraphIndex,
     ListIndex,
+    PropertyGraphIndex,
     RAKEKeywordTableIndex,
     SimpleKeywordTableIndex,
     SummaryIndex,
@@ -57,7 +64,7 @@ from llama_index.core.prompts import (
     PromptTemplate,
     SelectorPromptTemplate,
 )
-from llama_index.core.readers import SimpleDirectoryReader, download_loader
+from llama_index.core.readers import SimpleDirectoryReader
 
 # Response Synthesizer
 from llama_index.core.response_synthesizers.factory import get_response_synthesizer
@@ -67,6 +74,9 @@ from llama_index.core.service_context import (
     set_global_service_context,
 )
 
+# global settings
+from llama_index.core.settings import Settings
+
 # storage
 from llama_index.core.storage.storage_context import StorageContext
 
@@ -75,9 +85,6 @@ from llama_index.core.utilities.sql_wrapper import SQLDatabase
 
 # global tokenizer
 from llama_index.core.utils import get_tokenizer, set_global_tokenizer
-
-# global settings
-from llama_index.core.settings import Settings
 
 # best practices for library logging:
 # https://docs.python.org/3/howto/logging.html#configuring-logging-for-a-library
@@ -99,7 +106,6 @@ __all__ = [
     "PropertyGraphIndex",
     # indices - legacy names
     "GPTKeywordTableIndex",
-    "GPTKnowledgeGraphIndex",
     "GPTSimpleKeywordTableIndex",
     "GPTRAKEKeywordTableIndex",
     "GPTListIndex",
@@ -112,26 +118,15 @@ __all__ = [
     "BasePromptTemplate",
     "ChatPromptTemplate",
     "SelectorPromptTemplate",
-    "SummaryPrompt",
-    "TreeInsertPrompt",
-    "TreeSelectPrompt",
-    "TreeSelectMultiplePrompt",
-    "RefinePrompt",
-    "QuestionAnswerPrompt",
-    "KeywordExtractPrompt",
-    "QueryKeywordExtractPrompt",
     "Response",
     "Document",
     "SimpleDirectoryReader",
-    "VellumPredictor",
-    "VellumPromptRegistry",
     "MockEmbedding",
     "SQLDatabase",
     "SQLDocumentContextBuilder",
     "SQLContextBuilder",
     "PromptHelper",
     "IndexStructType",
-    "download_loader",
     "load_graph_from_storage",
     "load_index_from_storage",
     "load_indices_from_storage",
@@ -151,9 +146,6 @@ global_handler: Optional[BaseCallbackHandler] = None
 
 # NOTE: keep for backwards compatibility
 SQLContextBuilder = SQLDocumentContextBuilder
-
-# global service context for ServiceContext.from_defaults()
-global_service_context: Optional[ServiceContext] = None
 
 # global tokenizer
 global_tokenizer: Optional[Callable[[str], list]] = None

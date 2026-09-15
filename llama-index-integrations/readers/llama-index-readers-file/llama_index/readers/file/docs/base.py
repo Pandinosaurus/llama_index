@@ -1,4 +1,5 @@
-"""Docs parser.
+"""
+Docs parser.
 
 Contains parsers for docx, pdf files.
 
@@ -8,8 +9,8 @@ import io
 import logging
 import struct
 import zlib
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional, Union
 
 from tenacity import retry, stop_after_attempt
 
@@ -38,13 +39,15 @@ class PDFReader(BaseReader):
     )
     def load_data(
         self,
-        file: Path,
+        file: Union[Path, PurePosixPath],
         extra_info: Optional[Dict] = None,
         fs: Optional[AbstractFileSystem] = None,
     ) -> List[Document]:
         """Parse file."""
-        if not isinstance(file, Path):
-            file = Path(file)
+        fs = fs or get_default_fs()
+        _Path = Path if is_default_fs(fs) else PurePosixPath
+        if not isinstance(file, (Path, PurePosixPath)):
+            file = _Path(file)
 
         try:
             import pypdf
@@ -52,8 +55,8 @@ class PDFReader(BaseReader):
             raise ImportError(
                 "pypdf is required to read PDF files: `pip install pypdf`"
             )
-        fs = fs or get_default_fs()
-        with fs.open(file, "rb") as fp:
+
+        with fs.open(str(file), "rb") as fp:
             # Load the file in memory if the filesystem is not the default one to avoid
             # issues with pypdf
             stream = fp if is_default_fs(fs) else io.BytesIO(fp.read())
@@ -119,7 +122,7 @@ class DocxReader(BaseReader):
             )
 
         if fs:
-            with fs.open(file) as f:
+            with fs.open(str(file)) as f:
                 text = docx2txt.process(f)
         else:
             text = docx2txt.process(file)
@@ -135,6 +138,7 @@ class HWPReader(BaseReader):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.MAX_DECOMPRESSED_SECTION_SIZE = 100 * 1024 * 1024
         self.FILE_HEADER_SECTION = "FileHeader"
         self.HWP_SUMMARY_SECTION = "\x05HwpSummaryInformation"
         self.SECTION_NAME_LENGTH = len("Section")
@@ -148,13 +152,15 @@ class HWPReader(BaseReader):
         extra_info: Optional[Dict] = None,
         fs: Optional[AbstractFileSystem] = None,
     ) -> List[Document]:
-        """Load data and extract table from Hwp file.
+        """
+        Load data and extract table from Hwp file.
 
         Args:
             file (Path): Path for the Hwp file.
 
         Returns:
             List[Document]
+
         """
         import olefile
 
@@ -219,7 +225,7 @@ class HWPReader(BaseReader):
         data = bodytext.read()
 
         unpacked_data = (
-            zlib.decompress(data, -15) if self.is_compressed(load_file) else data
+            self._decompress_section(data) if self.is_compressed(load_file) else data
         )
         size = len(unpacked_data)
 
@@ -240,3 +246,28 @@ class HWPReader(BaseReader):
             i += 4 + rec_len
 
         return text
+
+    def _decompress_section(self, data: bytes) -> bytes:
+        decompressor = zlib.decompressobj(-15)
+        max_size = self.MAX_DECOMPRESSED_SECTION_SIZE
+        unpacked_data = decompressor.decompress(data, max_size + 1)
+
+        if len(unpacked_data) > max_size or decompressor.unconsumed_tail:
+            raise ValueError(
+                "Decompressed HWP section exceeds maximum allowed size "
+                f"({max_size} bytes)."
+            )
+
+        remaining_size = max_size + 1 - len(unpacked_data)
+        unpacked_data += decompressor.flush(remaining_size)
+        if not decompressor.eof:
+            raise zlib.error(
+                "Compressed HWP section ended before the stream was complete."
+            )
+        if len(unpacked_data) > max_size:
+            raise ValueError(
+                "Decompressed HWP section exceeds maximum allowed size "
+                f"({max_size} bytes)."
+            )
+
+        return unpacked_data

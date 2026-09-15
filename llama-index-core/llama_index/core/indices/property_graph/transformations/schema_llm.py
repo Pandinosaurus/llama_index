@@ -1,14 +1,10 @@
 import asyncio
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+import logging
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Type, Union
 
-try:
-    from typing import TypeAlias
-except ImportError:
-    # python 3.8 and 3.9 compatibility
-    TypeAlias = Any
 
 from llama_index.core.async_utils import run_jobs
-from llama_index.core.bridge.pydantic import create_model, validator, Field
+from llama_index.core.bridge.pydantic import create_model, field_validator
 from llama_index.core.graph_stores.types import (
     EntityNode,
     Relation,
@@ -16,10 +12,15 @@ from llama_index.core.graph_stores.types import (
     KG_NODES_KEY,
     KG_RELATIONS_KEY,
 )
+from llama_index.core.indices.property_graph.transformations.utils import (
+    get_entity_class,
+    get_relation_class,
+)
 from llama_index.core.prompts import PromptTemplate
-from llama_index.core.schema import TransformComponent, BaseNode
+from llama_index.core.schema import TransformComponent, BaseNode, MetadataMode
 from llama_index.core.llms.llm import LLM
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_ENTITIES = Literal[
     "PRODUCT",
@@ -97,10 +98,16 @@ class SchemaLLMPathExtractor(TransformComponent):
             The language model to use.
         extract_prompt (Union[PromptTemplate, str], optional):
             The template to use for the extraction query. Defaults to None.
-        possible_entities (Optional[TypeAlias], optional):
+        possible_entities (Optional[Type[Any]], optional):
             The possible entities to extract. Defaults to None.
-        possible_relations (Optional[TypeAlias], optional):
+        possible_entity_props (Optional[Union[List[str], List[Tuple[str, str]]], optional):
+            The possible entity properties to extract. Defaults to None.
+            Can be a list of strings or a list of tuples with the format (name, description).
+        possible_relations (Optional[Type[Any]], optional):
             The possible relations to extract. Defaults to None.
+        possible_relation_props (Optional[Union[List[str], List[Tuple[str, str]]], optional):
+            The possible relation properties to extract. Defaults to None.
+            Can be a list of strings or a list of tuples with the format (name, description).
         strict (bool, optional):
             Whether to enforce strict validation of entities and relations. Defaults to True.
             If false, values outside of the schema will be allowed.
@@ -112,6 +119,15 @@ class SchemaLLMPathExtractor(TransformComponent):
             The maximum number of triplets to extract per chunk. Defaults to 10.
         num_workers (int, optional):
             The number of workers to use. Defaults to 4.
+        allow_additional_properties (bool, optional):
+            Whether to allow ``additionalProperties: true`` in auto-generated
+            JSON schemas for entity/relation models with Dict properties.
+            Set to ``False`` when using LLM providers that require strict
+            schemas (e.g. OpenAI structured outputs, Google Gemini).
+            Defaults to True (preserving existing behavior).
+        raise_on_error (bool, optional):
+            Whether to raise exceptions if extraction fails. Defaults to False.
+
     """
 
     llm: LLM
@@ -120,19 +136,28 @@ class SchemaLLMPathExtractor(TransformComponent):
     kg_validation_schema: Dict[str, Any]
     num_workers: int
     max_triplets_per_chunk: int
+    possible_entity_props: Optional[List[str]]
+    possible_relation_props: Optional[List[str]]
     strict: bool
+    raise_on_error: bool = False
 
     def __init__(
         self,
         llm: LLM,
-        extract_prompt: Union[PromptTemplate, str] = None,
-        possible_entities: Optional[TypeAlias] = None,
-        possible_relations: Optional[TypeAlias] = None,
+        extract_prompt: Optional[Union[PromptTemplate, str]] = None,
+        possible_entities: Optional[Type[Any]] = None,
+        possible_entity_props: Optional[Union[List[str], List[Tuple[str, str]]]] = None,
+        possible_relations: Optional[Type[Any]] = None,
+        possible_relation_props: Optional[
+            Union[List[str], List[Tuple[str, str]]]
+        ] = None,
         strict: bool = True,
         kg_schema_cls: Any = None,
-        kg_validation_schema: Union[Dict[str, str], List[Triple]] = None,
+        kg_validation_schema: Optional[Union[Dict[str, str], List[Triple]]] = None,
         max_triplets_per_chunk: int = 10,
         num_workers: int = 4,
+        allow_additional_properties: bool = True,
+        raise_on_error: bool = False,
     ) -> None:
         """Init params."""
         if isinstance(extract_prompt, str):
@@ -140,35 +165,36 @@ class SchemaLLMPathExtractor(TransformComponent):
 
         # Build a pydantic model on the fly
         if kg_schema_cls is None:
-            possible_entities = possible_entities or DEFAULT_ENTITIES
-            entity_cls = create_model(
-                "Entity",
-                type=(
-                    possible_entities if strict else str,
-                    Field(
-                        ...,
-                        description=(
-                            "Entity in a knowledge graph. Only extract entities with types that are listed as valid: "
-                            + str(possible_entities)
-                        ),
-                    ),
-                ),
-                name=(str, ...),
+            possible_entities = possible_entities or DEFAULT_ENTITIES  # type: ignore
+            if possible_entity_props and isinstance(possible_entity_props[0], tuple):
+                entity_props = [  # type: ignore
+                    f"Property label `{k}` with description ({v})"
+                    for k, v in possible_entity_props
+                ]
+            else:
+                entity_props = possible_entity_props  # type: ignore
+            entity_cls = get_entity_class(
+                possible_entities,
+                entity_props,
+                strict,
+                clean_additional_properties=not allow_additional_properties,
             )
 
-            possible_relations = possible_relations or DEFAULT_RELATIONS
-            relation_cls = create_model(
-                "Relation",
-                type=(
-                    possible_relations if strict else str,
-                    Field(
-                        ...,
-                        description=(
-                            "Relation in a knowledge graph. Only extract relations with types that are listed as valid: "
-                            + str(possible_relations)
-                        ),
-                    ),
-                ),
+            possible_relations = possible_relations or DEFAULT_RELATIONS  # type: ignore
+            if possible_relation_props and isinstance(
+                possible_relation_props[0], tuple
+            ):
+                relation_props = [  # type: ignore
+                    f"Property label `{k}` with description ({v})"
+                    for k, v in possible_relation_props
+                ]
+            else:
+                relation_props = possible_relation_props  # type: ignore
+            relation_cls = get_relation_class(
+                possible_relations,
+                relation_props,
+                strict,
+                clean_additional_properties=not allow_additional_properties,
             )
 
             triplet_cls = create_model(
@@ -178,7 +204,7 @@ class SchemaLLMPathExtractor(TransformComponent):
                 object=(entity_cls, ...),
             )
 
-            def validate(v: Any, values: Any) -> Any:
+            def validate(v: Any) -> Any:
                 """Validate triplets."""
                 passing_triplets = []
                 for i, triplet in enumerate(v):
@@ -198,11 +224,11 @@ class SchemaLLMPathExtractor(TransformComponent):
 
                 return passing_triplets
 
-            root = validator("triplets", pre=True)(validate)
+            root = field_validator("triplets", mode="before")(validate)
             kg_schema_cls = create_model(
                 "KGSchema",
-                __validators__={"validator1": root},
-                triplets=(List[triplet_cls], ...),
+                __validators__={"validator1": root},  # type: ignore
+                triplets=(List[triplet_cls], ...),  # type: ignore
             )
             kg_schema_cls.__doc__ = "Knowledge Graph Schema."
 
@@ -210,7 +236,14 @@ class SchemaLLMPathExtractor(TransformComponent):
         kg_validation_schema = kg_validation_schema or DEFAULT_VALIDATION_SCHEMA
         # TODO: Remove this in a future version & encourage List[Triple] for validation schema
         if isinstance(kg_validation_schema, list):
-            kg_validation_schema = {"relationships": kg_validation_schema}
+            kg_validation_schema = {"relationships": kg_validation_schema}  # type: ignore
+
+        # flatten tuples now that we don't need the descriptions
+        if possible_relation_props and isinstance(possible_relation_props[0], tuple):
+            possible_relation_props = [x[0] for x in possible_relation_props]
+
+        if possible_entity_props and isinstance(possible_entity_props[0], tuple):
+            possible_entity_props = [x[0] for x in possible_entity_props]
 
         super().__init__(
             llm=llm,
@@ -219,7 +252,10 @@ class SchemaLLMPathExtractor(TransformComponent):
             kg_validation_schema=kg_validation_schema,
             num_workers=num_workers,
             max_triplets_per_chunk=max_triplets_per_chunk,
+            possible_entity_props=possible_entity_props,
+            possible_relation_props=possible_relation_props,
             strict=strict,
+            raise_on_error=raise_on_error,
         )
 
     @classmethod
@@ -227,52 +263,99 @@ class SchemaLLMPathExtractor(TransformComponent):
         return "SchemaLLMPathExtractor"
 
     def __call__(
-        self, nodes: List[BaseNode], show_progress: bool = False, **kwargs: Any
+        self, nodes: Sequence[BaseNode], show_progress: bool = False, **kwargs: Any
     ) -> List[BaseNode]:
         """Extract triplets from nodes."""
         return asyncio.run(self.acall(nodes, show_progress=show_progress, **kwargs))
 
-    def _prune_invalid_triplets(self, kg_schema: Any) -> List[Triplet]:
-        """Prune invalid triplets."""
-        assert isinstance(kg_schema, self.kg_schema_cls)
+    def _prune_invalid_props(
+        self, props: Dict[str, Any], allowed_props: Optional[List[str]]
+    ) -> Dict[str, Any]:
+        """Prune invalid properties."""
+        if not allowed_props:
+            return props
 
+        props_to_remove = []
+        for key in props:
+            if key not in allowed_props:
+                props_to_remove.append(key)
+
+        for key in props_to_remove:
+            del props[key]
+
+        return props
+
+    def _prune_invalid_triplets(self, kg_schema: Any) -> Sequence[Triplet]:
+        """Prune invalid triplets."""
         valid_triplets = []
         for triplet in kg_schema.triplets:
             subject = triplet.subject.name
             subject_type = triplet.subject.type
+            subject_props: Dict[str, Any] = {}
+            if hasattr(triplet.subject, "properties"):
+                subject_props = triplet.subject.properties or {}
+                if self.strict:
+                    subject_props = self._prune_invalid_props(
+                        subject_props,
+                        self.possible_entity_props,
+                    )
 
             relation = triplet.relation.type
+            relation_props: Dict[str, Any] = {}
+            if hasattr(triplet.relation, "properties"):
+                relation_props = triplet.relation.properties or {}
+                if self.strict:
+                    relation_props = self._prune_invalid_props(
+                        relation_props,
+                        self.possible_relation_props,
+                    )
 
             obj = triplet.object.name
             obj_type = triplet.object.type
+            obj_props: Dict[str, Any] = {}
+            if hasattr(triplet.object, "properties"):
+                obj_props = triplet.object.properties or {}
+                if self.strict:
+                    obj_props = self._prune_invalid_props(
+                        obj_props,
+                        self.possible_entity_props,
+                    )
 
             # Check if the triplet is valid based on the schema format
-            if (
-                isinstance(self.kg_validation_schema, dict)
-                and "relationships" in self.kg_validation_schema
-            ):
-                # Schema is a dictionary with a 'relationships' key and triples as values
-                if (subject_type, relation, obj_type) not in self.kg_validation_schema[
-                    "relationships"
-                ]:
-                    continue
-            else:
-                # Schema is the backwards-compat format
-                if relation not in self.kg_validation_schema.get(
-                    subject_type, [relation]
-                ) and relation not in self.kg_validation_schema.get(
-                    obj_type, [relation]
+            if self.strict:
+                if (
+                    isinstance(self.kg_validation_schema, dict)
+                    and "relationships" in self.kg_validation_schema
                 ):
-                    continue
+                    # Schema is a dictionary with a 'relationships' key and triples as values
+                    if (
+                        subject_type,
+                        relation,
+                        obj_type,
+                    ) not in self.kg_validation_schema["relationships"]:
+                        continue
+                else:
+                    # Schema is the backwards-compat format
+                    if relation not in self.kg_validation_schema.get(
+                        subject_type, [relation]
+                    ) and relation not in self.kg_validation_schema.get(
+                        obj_type, [relation]
+                    ):
+                        continue
 
             # Remove self-references
             if subject.lower() == obj.lower():
                 continue
 
-            subj_node = EntityNode(label=subject_type, name=subject)
-            obj_node = EntityNode(label=obj_type, name=obj)
+            subj_node = EntityNode(
+                label=subject_type, name=subject, properties=subject_props
+            )
+            obj_node = EntityNode(label=obj_type, name=obj, properties=obj_props)
             rel_node = Relation(
-                label=relation, source_id=subj_node.id, target_id=obj_node.id
+                label=relation,
+                source_id=subj_node.id,
+                target_id=obj_node.id,
+                properties=relation_props,
             )
             valid_triplets.append((subj_node, rel_node, obj_node))
 
@@ -280,9 +363,7 @@ class SchemaLLMPathExtractor(TransformComponent):
 
     async def _aextract(self, node: BaseNode) -> BaseNode:
         """Extract triplets from a node."""
-        assert hasattr(node, "text")
-
-        text = node.get_content(metadata_mode="llm")
+        text = node.get_content(metadata_mode=MetadataMode.LLM)
         try:
             kg_schema = await self.llm.astructured_predict(
                 self.kg_schema_cls,
@@ -291,7 +372,10 @@ class SchemaLLMPathExtractor(TransformComponent):
                 max_triplets_per_chunk=self.max_triplets_per_chunk,
             )
             triplets = self._prune_invalid_triplets(kg_schema)
-        except ValueError:
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.error(f"Error during extraction: {e!s}", exc_info=True)
+            if self.raise_on_error:
+                raise
             triplets = []
 
         existing_nodes = node.metadata.pop(KG_NODES_KEY, [])
@@ -299,9 +383,9 @@ class SchemaLLMPathExtractor(TransformComponent):
 
         metadata = node.metadata.copy()
         for subj, rel, obj in triplets:
-            subj.properties = metadata
-            obj.properties = metadata
-            rel.properties = metadata
+            subj.properties.update(metadata)
+            obj.properties.update(metadata)
+            rel.properties.update(metadata)
 
             existing_relations.append(rel)
             existing_nodes.append(subj)
@@ -313,7 +397,7 @@ class SchemaLLMPathExtractor(TransformComponent):
         return node
 
     async def acall(
-        self, nodes: List[BaseNode], show_progress: bool = False, **kwargs: Any
+        self, nodes: Sequence[BaseNode], show_progress: bool = False, **kwargs: Any
     ) -> List[BaseNode]:
         """Extract triplets from nodes async."""
         jobs = []

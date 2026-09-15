@@ -12,7 +12,7 @@ In order to utilize the tool, you will need to have the Session Pool management 
 
 ## Usage
 
-A more detailed sample is located in a Jupyter notebook [here](https://github.com/run-llama/llama_index/tree/main/docs/docs/examples/tools/azure_code_interpreter.ipynb)
+A more detailed sample is located in a Jupyter notebook [here](https://github.com/run-llama/llama_index/tree/main/docs/examples/tools/azure_code_interpreter.ipynb)
 
 Here's an example usage of the `AzureCodeInterpreterToolSpec`.
 
@@ -22,7 +22,13 @@ Here's an example usage of the `AzureCodeInterpreterToolSpec`.
 pip install llama-index-tools-azure-code-interpreter
 ```
 
-2. Next, set up the Dynamic Sessions tool and a LLM agent:
+2. Create a file named `.env` in the same directory as your script with the following content:
+
+```
+AZURE_POOL_MANAGEMENT_ENDPOINT=<poolManagementEndpoint>
+```
+
+3. Next, set up the Dynamic Sessions tool and a LLM agent:
 
 ```python
 from llama_index.tools.azure_code_interpreter import (
@@ -40,7 +46,7 @@ llm = AzureOpenAI(
 )
 
 code_interpreter_spec = AzureCodeInterpreterToolSpec(
-    pool_managment_endpoint="your-pool-management-endpoint"
+    pool_management_endpoint=os.getenv("AZURE_POOL_MANAGEMENT_ENDPOINT")
 )
 
 agent = ReActAgent.from_tools(
@@ -48,7 +54,7 @@ agent = ReActAgent.from_tools(
 )
 ```
 
-3. Use the tool as you need:
+4. Use the tool as you need:
 
 ```python
 print(agent.chat("Tell me the current time in Seattle."))

@@ -78,7 +78,8 @@ def _to_ha3_engine_filter(
 
 
 class AlibabaCloudOpenSearchConfig:
-    """`Alibaba Cloud Opensearch` client configuration.
+    """
+    `Alibaba Cloud Opensearch` client configuration.
 
     Attribute:
         endpoint (str) : The endpoint of opensearch instance, You can find it
@@ -131,8 +132,9 @@ class AlibabaCloudOpenSearchConfig:
         self.embedding_field = embedding_field
         self.text_field = text_field
         self.search_config = search_config
+        self.output_fields = output_fields
 
-        if output_fields is None:
+        if self.output_fields is None:
             self.output_fields = (
                 list(self.field_mapping.values()) if self.field_mapping else []
             )
@@ -150,7 +152,8 @@ class AlibabaCloudOpenSearchConfig:
 
 
 class AlibabaCloudOpenSearchStore(BasePydanticVectorStore):
-    """The AlibabaCloud OpenSearch Vector Store.
+    """
+    The AlibabaCloud OpenSearch Vector Store.
 
     In this vector store we store the text, its embedding and its metadata
     in a OpenSearch table.
@@ -220,10 +223,12 @@ class AlibabaCloudOpenSearchStore(BasePydanticVectorStore):
         nodes: List[BaseNode],
         **add_kwargs: Any,
     ) -> List[str]:
-        """Add nodes to vector store.
+        """
+        Add nodes to vector store.
 
         Args:
             nodes (List[BaseNode]): list of nodes with embeddings
+
         """
         return asyncio.get_event_loop().run_until_complete(
             self.async_add(nodes, **add_kwargs)
@@ -239,6 +244,7 @@ class AlibabaCloudOpenSearchStore(BasePydanticVectorStore):
 
         Args:
             nodes (List[BaseNode]): list of nodes with embeddings
+
         """
         for i in range(0, len(nodes), DEFAULT_BATCH_SIZE):
             docs = []
@@ -394,6 +400,7 @@ class AlibabaCloudOpenSearchStore(BasePydanticVectorStore):
 
         Return:
             OpenSearch query request
+
         """
         filter = _to_ha3_engine_filter(query.filters)
         request = models.QueryRequest(
